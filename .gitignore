@@ -38,3 +38,7 @@ data/sessions/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vendored third-party builds. yue2.cpp is cloned and compiled locally and carries 4.3 GB
+# of model weights under their own licence, so it is never committed. See BACKEND.md.
+third_party/
