@@ -143,17 +143,61 @@ good" may differ between synthesised loops and dense generative audio.
 This is a real risk and shadow mode is precisely the mechanism for catching it. It does not
 invalidate the approach; it bounds the claim.
 
+### Strudel — the strongest candidate, with one caveat
+
+**Strudel** (<https://strudel.cc>) is a JavaScript port of the TidalCycles pattern language,
+browser-first. It renders through WebAudio, so a headless renderer needs browser automation —
+but several exist, and the mature one works.
+
+Tested `dehenne/wirbel` (**AGPL-3.0-only**, npm, has CI):
+
+```
+setcpm(124/60/4)
+stack(
+  s("bd*4").gain(1.0),
+  s("~ cp").gain(.55),
+  s("~ ~ oh ~").gain(.3),
+  note("<C2 C2 F2 G2>*8").s("sawtooth").lpf(400).gain(.6)
+)
+```
+
+```
+$ wirbel house.strudel --format wav --duration 12 --json
+{"ok":true,"output":"/tmp/strudelout/house.wav","duration":12,"cps":0.00861}
+```
+
+**12 seconds of stereo audio in 0.52 s.** Two orders of magnitude faster than YuE2 (13 s per
+45 s), and it produced a genuine four-on-the-floor pattern with a filtered saw bass.
+
+Worth noting: `jebin2/strudel-render` advertises *"Pure renderer; loopability is config"* —
+directly relevant, since a DJ library wants loopable beds.
+
+**The caveat, and it matters:** my analyzer measured **130.8 BPM against a requested 124**, with
+beat confidence **0.00**. Synthesised material defeats our beat tracker, because a held
+four-on-the-floor kick is not the onset structure a tracker expects. Also -27.65 LUFS with true
+peak -14.66 dBTP — quiet, needing gain.
+
+So Strudel gives near-perfect tempo *ground truth* (it is specified), but **our verification of
+it is currently broken.** Fixing beat detection for synthetic material is a prerequisite, not a
+detail — and it is worth fixing regardless, because the same failure mode would hit any
+perfectly-quantised material in the depot.
+
 ### Decision
 
-**Use algorithmic MIDI for the depot and the Stage 1 pipeline test. Keep YuE2 as the production
+**Use Strudel to fill the depot and the Stage 1 pipeline test. Keep YuE2 as the production
 aesthetic.**
 
-`isobar` installs and imports, but its current `Pattern` API differs from the documented one and
-needs study. `mido` is verified working and sufficient for the deterministic parts; `isobar` is the
-better tool for musical pattern generation once its API is understood.
+Rationale: 0.5 s per render makes a 100-track depot nearly free, tempo is specified rather than
+estimated, and patterns are per-instrument so stems are genuine. YuE2 stays for the audible
+library because it sounds like music rather than a drum machine.
 
-Rendering MIDI to audio is a separate open question — no synth is chosen, and a soundfont plus a
-renderer is likely required.
+Licence is the deciding factor against `isobar`: Strudel examples carry **CC BY-NC-SA 4.0** and
+wirbel is **AGPL-3.0-only**. Both are fine for this non-commercial project but neither is
+permissive, so patterns and rendered audio must be kept as separate artefacts, never vendored
+into the source tree.
+
+**Open item:** beat detection on synthesised material. Until it works, Strudel output cannot be
+trusted to the same gate as YuE2 output.
 
 ---
 
