@@ -365,3 +365,35 @@ def test_a_non_looping_deck_still_stops_at_the_end(tmp_path):
     mixer.queue.put(Command(CommandKind.PLAY, deck=0))
     render(mixer, blocks=400)
     assert mixer.decks[0].playing is False
+
+
+def test_rerendering_a_decision_clears_its_stale_clips(tmp_path):
+    """Overlapping indices with different audio under one name is a labelling trap."""
+    from vexa_audio.preview import PreviewRenderer, PreviewSpec
+
+    renderer = PreviewRenderer(sample_rate=SR, out_dir=tmp_path)
+    track = load_track(make_track(tmp_path / "a.wav"), sample_rate=SR)
+
+    renderer.render_transition(PreviewSpec("x"), track, track, out_name="dec0_0_old")
+    renderer.render_transition(PreviewSpec("x"), track, track, out_name="dec0_1_old")
+    assert len(list(tmp_path.glob("dec0_*.wav"))) == 2
+
+    # Re-render the same decision with a different option set.
+    out = renderer.render_comparison(track, [("alpha", track), ("beta", track)], name="dec0")
+    assert set(out) == {"alpha", "beta"}
+    remaining = sorted(p.name for p in tmp_path.glob("dec0_*.wav"))
+    assert not any("old" in n for n in remaining), remaining
+    assert len(remaining) == 2
+
+
+def test_clear_only_touches_the_named_decision(tmp_path):
+    from vexa_audio.preview import PreviewRenderer, PreviewSpec
+
+    renderer = PreviewRenderer(sample_rate=SR, out_dir=tmp_path)
+    track = load_track(make_track(tmp_path / "a.wav"), sample_rate=SR)
+    renderer.render_transition(PreviewSpec("x"), track, track, out_name="keepme_0")
+    renderer.render_transition(PreviewSpec("x"), track, track, out_name="dropme_0")
+
+    assert renderer.clear("dropme") == 1
+    assert list(tmp_path.glob("keepme_*.wav"))
+    assert not list(tmp_path.glob("dropme_*.wav"))

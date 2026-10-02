@@ -126,7 +126,13 @@ class PreviewRenderer:
         lead_in_s: float = 4.0,
         fade_s: float = 2.0,
     ) -> dict[str, Preview]:
-        """Every candidate, each rendered identically so they can be compared fairly."""
+        """Every candidate, each rendered identically so they can be compared fairly.
+
+        Clips for this decision are cleared first. Without that, re-rendering a decision after its
+        option set changed leaves the old clips behind under overlapping indices, so a listener
+        replaying ``decision000_1_*`` hears two different things under one name.
+        """
+        self.clear(name)
         results: dict[str, Preview] = {}
         for index, (label, track) in enumerate(candidates):
             results[label] = self.render_transition(
@@ -136,6 +142,14 @@ class PreviewRenderer:
                 out_name=f"{name}_{index}_{_slug(label)}",
             )
         return results
+
+    def clear(self, name: str) -> int:
+        """Remove a previous render of one decision. Returns how many files went."""
+        removed = 0
+        for path in self.out_dir.glob(f"{name}_*.wav"):
+            path.unlink()
+            removed += 1
+        return removed
 
     def render_manifest(
         self, previews: dict[str, Preview], path: str | Path
