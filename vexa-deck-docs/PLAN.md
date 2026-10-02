@@ -609,6 +609,7 @@ Not oversights. From `PRODUCT.md:56-61` and `IDEAS.md:53-57`.
 | `ARCHITECTURE.md` | Service semantics, asset model, scheduling. Authoritative for *contract meaning* |
 | `LAYA_DATA.md` | Dataset sources, labeling, evaluation, provenance. Authoritative for *data policy* |
 | `DATASETS.md` | **Verified** dataset status, licences and what each one can and cannot teach. Supersedes `LAYA_DATA.md` where they disagree |
+| `FINETUNE-DECISION.md` | **What we train on, in what order, and what we refuse to train on.** Authoritative for the plan |
 | `FINETUNE.md` | The fine-tune runbook: measured facts, bugs found, promotion gates |
 | `VISUAL_DIRECTION.md` | Pixel-art GUI and Vexa character brief. Authoritative for *look* |
 | `IDEAS.md` | Optional experiments. Authoritative for *what comes after the core* |
