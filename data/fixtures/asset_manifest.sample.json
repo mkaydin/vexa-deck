@@ -1,0 +1,104 @@
+{
+  "approval": "approved",
+  "asset_id": "asset_42",
+  "audio": {
+    "channels": 2,
+    "codec": "flac",
+    "duration_s": 214.85,
+    "integrated_lufs": -9.2,
+    "sample_rate_hz": 48000,
+    "true_peak_dbtp": -1.4
+  },
+  "beat_grid": {
+    "bpm": 122.0,
+    "confidence": 0.91,
+    "grid_version": 1,
+    "time_signature": [
+      4,
+      4
+    ]
+  },
+  "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "contract_revision": "1.0.0",
+  "contract_version": 1,
+  "family_id": "family_8",
+  "key": {
+    "confidence": 0.82,
+    "value": "A minor"
+  },
+  "loops": [
+    {
+      "beat_aligned": true,
+      "end_bar": 64,
+      "start_bar": 48
+    }
+  ],
+  "parent_id": null,
+  "provenance": {
+    "backend": "yue2.cpp",
+    "created_at": "2026-10-02T07:22:21.448589Z",
+    "decoder_id": "m-a-p/YuE2-Vae",
+    "license": "CC-BY-NC-4.0",
+    "model_id": "m-a-p/YuE2-3B",
+    "model_revision": "1a96eca688d6ae5d7f0feb88573fec89920fcd19",
+    "quantization": "Q8_0",
+    "seed": 831001,
+    "source_hashes": [],
+    "source_prompt": "jazz bar, brushed drums, upright bass, no guitar"
+  },
+  "quality": {
+    "audio_quality_ok": true,
+    "beat_grid_ok": true,
+    "decode_ok": true,
+    "duration_ok": true,
+    "flags": [],
+    "loop_boundary_ok": true,
+    "loudness_ok": true,
+    "notes": {
+      "loudness": "-9.2 LUFS integrated, -1.4 dBTP"
+    }
+  },
+  "readiness": "ready",
+  "sections": [
+    {
+      "end_bar": 16,
+      "kind": "intro",
+      "section_id": "intro",
+      "start_bar": 0
+    },
+    {
+      "end_bar": 48,
+      "kind": "build",
+      "section_id": "build",
+      "start_bar": 16
+    },
+    {
+      "end_bar": 88,
+      "kind": "drop",
+      "section_id": "drop",
+      "start_bar": 48
+    }
+  ],
+  "source_type": "yue2_render",
+  "tags": {
+    "energy": [
+      {
+        "confidence": 0.9,
+        "value": "0.46"
+      }
+    ],
+    "instrument": [
+      {
+        "confidence": 0.71,
+        "value": "rhodes"
+      }
+    ],
+    "mood": [
+      {
+        "confidence": 0.88,
+        "value": "rain-soaked"
+      }
+    ]
+  },
+  "version": 1
+}

@@ -1,0 +1,23 @@
+[project]
+name = "vexa-audio"
+version = "0.1.0"
+description = "Realtime audio engine: two decks, crossfade, master limiter, no model in the callback"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vexa-contracts",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "sounddevice>=0.5",
+]
+
+[project.optional-dependencies]
+# Offline transition rendering and preview generation. Separate so the realtime path never
+# pulls a diffusion model into its environment.
+tools = ["scipy>=1.11"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vexa_audio"]

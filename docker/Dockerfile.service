@@ -1,0 +1,70 @@
+# Shared base image for the containerised services.
+#
+# Which services use this: orchestrator, planner, analyzer, and the job queue's clients.
+# Which do NOT: laya service, yue2 worker, audio engine, GUI.
+#
+# Those stay on the host because they need the GPU or the audio device, and model weights are
+# deliberately never baked into an image (PLAN.md §4, decision D4). A container boundary on a
+# realtime audio path is a latency risk that buys nothing.
+
+# uv resolves the whole workspace from the lockfile, so the image and the host agree exactly.
+# No BuildKit cache mounts: this builds on a plain builder too, which matters more than the
+# marginal layer-cache speedup when someone first runs it on their own machine.
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /app
+
+# Copy only what the resolver needs first, so a source-only change does not bust the layer cache.
+COPY pyproject.toml ./
+COPY uv.lock* ./
+COPY packages/contracts/pyproject.toml packages/contracts/
+COPY services/orchestrator/pyproject.toml services/orchestrator/
+COPY services/planner/pyproject.toml services/planner/
+COPY services/laya/pyproject.toml services/laya/
+COPY workers/yue2/pyproject.toml workers/yue2/
+
+RUN uv sync --extra core --no-install-project --no-install-workspace
+
+# Now the source itself.
+COPY packages/ packages/
+COPY services/ services/
+COPY workers/ workers/
+
+RUN uv sync --extra core --no-editable
+
+# --- runtime -----------------------------------------------------------------
+
+FROM python:3.12-slim-bookworm
+
+# libsndfile1 is what soundfile binds to; without it the analyzer fails at import rather than
+# at the point of use, which is a much worse time to find out.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libsndfile1 curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Create and hand over the state directory while still root, then drop privileges. Doing this the
+# other way round fails: an unprivileged user cannot create /var/lib/vexa.
+RUN useradd --create-home --uid 10001 vexa \
+ && mkdir -p /var/lib/vexa \
+ && chown -R vexa:vexa /var/lib/vexa
+
+USER vexa
+
+WORKDIR /app
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    VEXA_STATE_DIR=/var/lib/vexa
+
+COPY --from=builder --chown=vexa:vexa /app/.venv /app/.venv
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
+
+CMD ["python", "-c", "print('override per service')"]

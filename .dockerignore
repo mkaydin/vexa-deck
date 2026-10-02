@@ -1,0 +1,56 @@
+# Keep the build context small and the image reproducible.
+#
+# Everything excluded here would either bloat the context, leak local state into a published
+# image, or break the layer cache. In particular: model weights and generated audio must never
+# enter an image, because they carry their own licences and are separate downloads by design
+# (PLAN.md, decision D4).
+
+.git
+.gitignore
+.github
+
+# Local runtime state
+.venv/
+var/
+runtime/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Weights, checkpoints and generated audio. Separate artifacts, never baked in.
+runs/
+models/
+weights/
+data/sessions/
+assets/generated/
+assets/library/
+assets/audio/
+*.safetensors
+*.gguf
+*.ckpt
+*.pt
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Docs and tooling are not needed to run a service.
+vexa-deck-docs/
+character-sheets/
+tools/
+tests/
+
+# Caches and noise
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+*.log
+
+# Docker's own files
+docker-compose*.yml
+Dockerfile*
+.dockerignore

@@ -1,0 +1,77 @@
+[project]
+name = "vexa-deck"
+version = "0.1.0"
+description = "VEXA//DECK backend: AI-assisted continuous DJ with bounded model decisions"
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+dependencies = [
+    "vexa-contracts",
+    "vexa-orchestrator",
+    "vexa-planner",
+    "vexa-laya",
+    "vexa-yue2-worker",
+    "vexa-audio",
+]
+
+[tool.uv.workspace]
+members = [
+    "packages/contracts",
+    "services/orchestrator",
+    "services/audio",
+    "services/planner",
+    "services/laya",
+    "workers/yue2",
+]
+
+[tool.uv.sources]
+vexa-contracts = { workspace = true }
+vexa-orchestrator = { workspace = true }
+vexa-planner = { workspace = true }
+vexa-laya = { workspace = true }
+vexa-yue2-worker = { workspace = true }
+vexa-audio = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[project.optional-dependencies]
+# Runtime core: orchestrator, contracts, planner, ingestion analysis.
+core = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+]
+# Local GPU inference. Kept separate so audio tooling never drags CUDA in.
+gpu = [
+    "torch>=2.14",
+    "transformers>=5.18",
+    "accelerate>=1.0",
+    "diffusers>=0.31",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    # `__all__` is grouped by contract domain to mirror the module layout, which reads better
+    # than alphabetical order for a contracts package.
+    "RUF022",
+]

@@ -1,0 +1,90 @@
+# VEXA//DECK backend stack.
+#
+# What is here, and why (PLAN.md §4):
+#
+#   CONTAINERS  orchestrator, planner, analyzer, redis
+#               Data, control plane, and anything network-egressing or restartable.
+#
+#   HOST        laya service, yue2 worker, audio engine, GUI
+#               Anything needing the GPU or the audio device. Model weights never enter an image.
+#
+# No service below requests a GPU. That is deliberate: the two model services run on the host
+# where the drivers and the weights already are, and a container boundary on the realtime audio
+# path would add latency jitter for no benefit.
+
+name: vexa-deck
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Job priority and retry live here, so they survive an orchestrator restart.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service
+    restart: unless-stopped
+    command: ["python", "-m", "vexa_orchestrator"]
+    environment:
+      VEXA_HOST: "0.0.0.0"
+      VEXA_PORT: "8000"
+      VEXA_LOG_LEVEL: "${VEXA_LOG_LEVEL:-info}"
+      VEXA_REDIS_URL: "redis://redis:6379/0"
+      # Where the host-side workers reach this service. Model workers run outside compose, so
+      # they need a published port rather than a compose-network name.
+      VEXA_PUBLIC_URL: "http://localhost:${VEXA_ORCHESTRATOR_PORT:-8080}"
+      # Routes intent through the isolated planner service. Unset means the orchestrator uses
+      # its local rule-based planner in-process, which is a supported standalone configuration.
+      VEXA_PLANNER_URL: "http://planner:8001"
+    ports:
+      - "${VEXA_ORCHESTRATOR_PORT:-8080}:8000"
+    volumes:
+      - vexa-state:/var/lib/vexa
+      # Read-only access to the library, so a container mistake cannot rewrite an asset.
+      - ./assets:/app/assets:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      planner:
+        condition: service_healthy
+    # The orchestrator is on the control plane, not the realtime path. Killing it must never
+    # stop playback, so it is given a generous window to notice and a clean way to be killed.
+    stop_grace_period: 10s
+
+  planner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service
+    restart: unless-stopped
+    command: ["python", "-m", "vexa_planner"]
+    environment:
+      VEXA_HOST: "0.0.0.0"
+      VEXA_PORT: "8001"
+      # Unset by default, and that is a supported state: the local rules carry the set.
+      PLANNER_BASE_URL: "${PLANNER_BASE_URL:-}"
+      PLANNER_MODEL: "${PLANNER_MODEL:-}"
+      PLANNER_API_KEY: "${PLANNER_API_KEY:-}"
+    ports:
+      - "${VEXA_PLANNER_PORT:-8081}:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis-data:
+  vexa-state:

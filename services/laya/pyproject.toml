@@ -1,0 +1,24 @@
+[project]
+name = "vexa-laya"
+version = "0.1.0"
+description = "Laya decision service: bounded action choice with shadow mode and calibration gate"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vexa-contracts",
+    "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+# torch 2.14 is what Laya requires and what carries sm_120 (RTX 5060 Ti) support.
+gpu = [
+    "torch>=2.14",
+    "transformers>=5.18",
+    "laya>=0.3.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vexa_laya"]

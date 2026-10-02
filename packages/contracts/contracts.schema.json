@@ -1,0 +1,2627 @@
+{
+  "contract_revision": "1.0.0",
+  "contract_version": 1,
+  "schemas": {
+    "AssetManifest": {
+      "$defs": {
+        "ApprovalState": {
+          "description": "Human approval. Only approved assets may enter the ready library (``PRODUCT.md:27``).",
+          "enum": [
+            "pending",
+            "approved",
+            "rejected"
+          ],
+          "title": "ApprovalState",
+          "type": "string"
+        },
+        "AudioProperties": {
+          "additionalProperties": false,
+          "description": "Container and measured level. Loudness and peak are measured, never estimated.",
+          "properties": {
+            "channels": {
+              "minimum": 1,
+              "title": "Channels",
+              "type": "integer"
+            },
+            "codec": {
+              "title": "Codec",
+              "type": "string"
+            },
+            "duration_s": {
+              "exclusiveMinimum": 0.0,
+              "title": "Duration S",
+              "type": "number"
+            },
+            "integrated_lufs": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Integrated Lufs"
+            },
+            "sample_rate_hz": {
+              "exclusiveMinimum": 0,
+              "title": "Sample Rate Hz",
+              "type": "integer"
+            },
+            "true_peak_dbtp": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "True Peak Dbtp"
+            }
+          },
+          "required": [
+            "codec",
+            "sample_rate_hz",
+            "channels",
+            "duration_s"
+          ],
+          "title": "AudioProperties",
+          "type": "object"
+        },
+        "BackendKind": {
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "enum": [
+            "yue2.cpp",
+            "torch",
+            "audio.cpp"
+          ],
+          "title": "BackendKind",
+          "type": "string"
+        },
+        "BeatGrid": {
+          "additionalProperties": false,
+          "description": "Measured tempo grid. ``grid_version`` changes whenever the grid is recomputed.",
+          "properties": {
+            "bpm": {
+              "exclusiveMinimum": 0.0,
+              "title": "Bpm",
+              "type": "number"
+            },
+            "confidence": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Confidence",
+              "type": "number"
+            },
+            "grid_version": {
+              "minimum": 1,
+              "title": "Grid Version",
+              "type": "integer"
+            },
+            "time_signature": {
+              "default": [
+                4,
+                4
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Time Signature",
+              "type": "array"
+            }
+          },
+          "required": [
+            "bpm",
+            "grid_version",
+            "confidence"
+          ],
+          "title": "BeatGrid",
+          "type": "object"
+        },
+        "Estimate": {
+          "additionalProperties": false,
+          "description": "A value the models produced, with how much to trust it.",
+          "properties": {
+            "confidence": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Confidence",
+              "type": "number"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "confidence"
+          ],
+          "title": "Estimate",
+          "type": "object"
+        },
+        "KeyEstimate": {
+          "additionalProperties": false,
+          "description": "Musical key plus its confidence. Used for the harmonic compatibility filter.",
+          "properties": {
+            "confidence": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Confidence",
+              "type": "number"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "confidence"
+          ],
+          "title": "KeyEstimate",
+          "type": "object"
+        },
+        "LoopPoints": {
+          "additionalProperties": false,
+          "description": "An approved loop region. Must be beat-aligned to be schedulable.",
+          "properties": {
+            "beat_aligned": {
+              "default": false,
+              "title": "Beat Aligned",
+              "type": "boolean"
+            },
+            "end_bar": {
+              "minimum": 0,
+              "title": "End Bar",
+              "type": "integer"
+            },
+            "start_bar": {
+              "minimum": 0,
+              "title": "Start Bar",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start_bar",
+            "end_bar"
+          ],
+          "title": "LoopPoints",
+          "type": "object"
+        },
+        "Provenance": {
+          "additionalProperties": false,
+          "description": "Everything needed to reproduce an asset (``README.md:22``).\n\nA quantized render is a materially different artifact from a bf16 one, so the backend and its\nquant level are recorded here rather than treated as an implementation detail.",
+          "properties": {
+            "backend": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BackendKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "decoder_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decoder Id"
+            },
+            "license": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "License"
+            },
+            "model_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Id"
+            },
+            "model_revision": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Revision"
+            },
+            "quantization": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quantization"
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seed"
+            },
+            "source_hashes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Hashes",
+              "type": "array"
+            },
+            "source_prompt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Prompt"
+            }
+          },
+          "title": "Provenance",
+          "type": "object"
+        },
+        "QualityReport": {
+          "additionalProperties": false,
+          "description": "The ingestion gates from ``ARCHITECTURE.md:46``.\n\nAll six must pass before an asset may be scheduled. ``passed`` is derived rather than stored\nso a caller cannot mark a failing asset ready by setting a flag.",
+          "properties": {
+            "audio_quality_ok": {
+              "default": false,
+              "title": "Audio Quality Ok",
+              "type": "boolean"
+            },
+            "beat_grid_ok": {
+              "default": false,
+              "title": "Beat Grid Ok",
+              "type": "boolean"
+            },
+            "decode_ok": {
+              "default": false,
+              "title": "Decode Ok",
+              "type": "boolean"
+            },
+            "duration_ok": {
+              "default": false,
+              "title": "Duration Ok",
+              "type": "boolean"
+            },
+            "flags": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Flags",
+              "type": "array"
+            },
+            "loop_boundary_ok": {
+              "default": false,
+              "title": "Loop Boundary Ok",
+              "type": "boolean"
+            },
+            "loudness_ok": {
+              "default": false,
+              "title": "Loudness Ok",
+              "type": "boolean"
+            },
+            "notes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Notes",
+              "type": "object"
+            }
+          },
+          "title": "QualityReport",
+          "type": "object"
+        },
+        "ReadinessState": {
+          "description": "Whether an asset may be scheduled.\n\n``READY`` is reachable only after decode, duration, loudness, beat-grid, loop-boundary and\naudio-quality checks pass (``ARCHITECTURE.md:46``). Nothing in the runtime may schedule\nagainst any other value.",
+          "enum": [
+            "unanalyzed",
+            "analyzing",
+            "quarantined",
+            "awaiting_review",
+            "ready",
+            "failed"
+          ],
+          "title": "ReadinessState",
+          "type": "string"
+        },
+        "SectionMarker": {
+          "additionalProperties": false,
+          "description": "A detected structural section, expressed in bars so it survives tempo changes.",
+          "properties": {
+            "end_bar": {
+              "minimum": 0,
+              "title": "End Bar",
+              "type": "integer"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "section_id": {
+              "title": "Section Id",
+              "type": "string"
+            },
+            "start_bar": {
+              "minimum": 0,
+              "title": "Start Bar",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "section_id",
+            "kind",
+            "start_bar",
+            "end_bar"
+          ],
+          "title": "SectionMarker",
+          "type": "object"
+        },
+        "SourceType": {
+          "description": "Where an asset came from. ``ARCHITECTURE.md:44``.",
+          "enum": [
+            "yue2_render",
+            "revised_render",
+            "user_import",
+            "stem_separation",
+            "loop_extract",
+            "pack_import"
+          ],
+          "title": "SourceType",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One playable material.\n\nThe ``READY`` invariant is enforced structurally: a manifest may only claim readiness when it\nis approved *and* every quality gate passed. This is the single most important invariant in\nthe library, because everything downstream is allowed to assume ``READY`` means playable.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalState",
+          "default": "pending"
+        },
+        "asset_id": {
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "audio": {
+          "$ref": "#/$defs/AudioProperties"
+        },
+        "beat_grid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BeatGrid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "family_id": {
+          "minLength": 1,
+          "title": "Family Id",
+          "type": "string"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KeyEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "loops": {
+          "items": {
+            "$ref": "#/$defs/LoopPoints"
+          },
+          "title": "Loops",
+          "type": "array"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "quality": {
+          "$ref": "#/$defs/QualityReport"
+        },
+        "readiness": {
+          "$ref": "#/$defs/ReadinessState",
+          "default": "unanalyzed"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/SectionMarker"
+          },
+          "title": "Sections",
+          "type": "array"
+        },
+        "source_type": {
+          "$ref": "#/$defs/SourceType"
+        },
+        "tags": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/Estimate"
+            },
+            "type": "array"
+          },
+          "title": "Tags",
+          "type": "object"
+        },
+        "version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "asset_id",
+        "family_id",
+        "source_type",
+        "content_sha256",
+        "audio"
+      ],
+      "title": "AssetManifest",
+      "type": "object"
+    },
+    "AudioProperties": {
+      "additionalProperties": false,
+      "description": "Container and measured level. Loudness and peak are measured, never estimated.",
+      "properties": {
+        "channels": {
+          "minimum": 1,
+          "title": "Channels",
+          "type": "integer"
+        },
+        "codec": {
+          "title": "Codec",
+          "type": "string"
+        },
+        "duration_s": {
+          "exclusiveMinimum": 0.0,
+          "title": "Duration S",
+          "type": "number"
+        },
+        "integrated_lufs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Integrated Lufs"
+        },
+        "sample_rate_hz": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        },
+        "true_peak_dbtp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "True Peak Dbtp"
+        }
+      },
+      "required": [
+        "codec",
+        "sample_rate_hz",
+        "channels",
+        "duration_s"
+      ],
+      "title": "AudioProperties",
+      "type": "object"
+    },
+    "BeatGrid": {
+      "additionalProperties": false,
+      "description": "Measured tempo grid. ``grid_version`` changes whenever the grid is recomputed.",
+      "properties": {
+        "bpm": {
+          "exclusiveMinimum": 0.0,
+          "title": "Bpm",
+          "type": "number"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "grid_version": {
+          "minimum": 1,
+          "title": "Grid Version",
+          "type": "integer"
+        },
+        "time_signature": {
+          "default": [
+            4,
+            4
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Time Signature",
+          "type": "array"
+        }
+      },
+      "required": [
+        "bpm",
+        "grid_version",
+        "confidence"
+      ],
+      "title": "BeatGrid",
+      "type": "object"
+    },
+    "Contract": {
+      "additionalProperties": false,
+      "description": "Base for everything that crosses a process boundary.",
+      "properties": {
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        }
+      },
+      "title": "Contract",
+      "type": "object"
+    },
+    "DecisionRequest": {
+      "$defs": {
+        "ActionType": {
+          "description": "The concrete things a decision can choose between (``LAYA_DATA.md:7-9``).",
+          "enum": [
+            "continue_current",
+            "transition",
+            "play_fallback_loop",
+            "layer_add",
+            "layer_remove",
+            "bass_swap"
+          ],
+          "title": "ActionType",
+          "type": "string"
+        },
+        "DeckId": {
+          "enum": [
+            "a",
+            "b"
+          ],
+          "title": "DeckId",
+          "type": "string"
+        },
+        "DeckState": {
+          "additionalProperties": false,
+          "description": "One deck. ``asset_id is None`` means the deck is idle.",
+          "properties": {
+            "asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Asset Id"
+            },
+            "deck_id": {
+              "$ref": "#/$defs/DeckId"
+            },
+            "gain_db": {
+              "default": 0.0,
+              "maximum": 6.0,
+              "minimum": -60.0,
+              "title": "Gain Db",
+              "type": "number"
+            },
+            "playing": {
+              "default": false,
+              "title": "Playing",
+              "type": "boolean"
+            },
+            "position_bar": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Position Bar",
+              "type": "integer"
+            },
+            "tempo_ratio": {
+              "default": 1.0,
+              "exclusiveMinimum": 0.0,
+              "maximum": 2.0,
+              "title": "Tempo Ratio",
+              "type": "number"
+            }
+          },
+          "required": [
+            "deck_id"
+          ],
+          "title": "DeckState",
+          "type": "object"
+        },
+        "FeasibleAction": {
+          "additionalProperties": false,
+          "description": "One concrete, already-validated option.\n\nMirrors the shape in ``ARCHITECTURE.md:52-62``. The fields are the *only* things a selector\nmay influence; there is deliberately no free-form command here.",
+          "properties": {
+            "action_id": {
+              "minLength": 1,
+              "title": "Action Id",
+              "type": "string"
+            },
+            "action_type": {
+              "$ref": "#/$defs/ActionType"
+            },
+            "asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Asset Id"
+            },
+            "energy_fit": {
+              "default": 0.5,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Energy Fit",
+              "type": "number"
+            },
+            "entry_bar": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Entry Bar",
+              "type": "integer"
+            },
+            "fade_bars": {
+              "default": 0,
+              "maximum": 64,
+              "minimum": 0,
+              "title": "Fade Bars",
+              "type": "integer"
+            },
+            "rationale": {
+              "default": "",
+              "title": "Rationale",
+              "type": "string"
+            },
+            "start_at_session_bar": {
+              "minimum": 0,
+              "title": "Start At Session Bar",
+              "type": "integer"
+            },
+            "tempo_ratio": {
+              "default": 1.0,
+              "exclusiveMinimum": 0.5,
+              "maximum": 2.0,
+              "title": "Tempo Ratio",
+              "type": "number"
+            },
+            "transition_preset": {
+              "default": "fade",
+              "title": "Transition Preset",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action_id",
+            "action_type",
+            "start_at_session_bar"
+          ],
+          "title": "FeasibleAction",
+          "type": "object"
+        },
+        "MusicalClock": {
+          "additionalProperties": false,
+          "description": "Position within the set, in musical time.",
+          "properties": {
+            "bar": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Bar",
+              "type": "integer"
+            },
+            "beat": {
+              "default": 0,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Beat",
+              "type": "integer"
+            },
+            "beats_per_bar": {
+              "default": 4,
+              "maximum": 32,
+              "minimum": 1,
+              "title": "Beats Per Bar",
+              "type": "integer"
+            },
+            "bpm": {
+              "default": 120.0,
+              "exclusiveMinimum": 0.0,
+              "title": "Bpm",
+              "type": "number"
+            }
+          },
+          "title": "MusicalClock",
+          "type": "object"
+        },
+        "SessionState": {
+          "additionalProperties": false,
+          "description": "A running set.\n\n``generation`` increments on every accepted user request. A scheduled action carries the\ngeneration it was planned under, so a late-arriving generation result cannot reverse the\nlistener's latest direction (``ARCHITECTURE.md:81``).",
+          "properties": {
+            "active_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Active Request Id"
+            },
+            "clock": {
+              "$ref": "#/$defs/MusicalClock"
+            },
+            "committed_action_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Committed Action Id"
+            },
+            "contract_revision": {
+              "default": "1.0.0",
+              "title": "Contract Revision",
+              "type": "string"
+            },
+            "contract_version": {
+              "default": 1,
+              "title": "Contract Version",
+              "type": "integer"
+            },
+            "decks": {
+              "additionalProperties": {
+                "$ref": "#/$defs/DeckState"
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/DeckId"
+              },
+              "title": "Decks",
+              "type": "object"
+            },
+            "energy": {
+              "default": 0.5,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Energy",
+              "type": "number"
+            },
+            "fallback_asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fallback Asset Id"
+            },
+            "generation": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Generation",
+              "type": "integer"
+            },
+            "session_id": {
+              "minLength": 1,
+              "title": "Session Id",
+              "type": "string"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            },
+            "theme": {
+              "minLength": 1,
+              "title": "Theme",
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "theme"
+          ],
+          "title": "SessionState",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "What a selector is asked to answer (``ARCHITECTURE.md:103``).",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/FeasibleAction"
+          },
+          "minItems": 2,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "deadline": {
+          "format": "date-time",
+          "title": "Deadline",
+          "type": "string"
+        },
+        "decision_id": {
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "default": "rules-v1",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "required": [
+        "decision_id",
+        "session_id",
+        "state",
+        "candidates"
+      ],
+      "title": "DecisionRequest",
+      "type": "object"
+    },
+    "DecisionResponse": {
+      "additionalProperties": false,
+      "description": "A selector's answer. Deliberately thin \u2014 an ID, a confidence, and a reason.",
+      "properties": {
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "decision_id": {
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "fell_back": {
+          "default": false,
+          "title": "Fell Back",
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Latency Ms",
+          "type": "number"
+        },
+        "reasoning": {
+          "default": "",
+          "title": "Reasoning",
+          "type": "string"
+        },
+        "selector": {
+          "default": "rules",
+          "title": "Selector",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "action_id",
+        "confidence"
+      ],
+      "title": "DecisionResponse",
+      "type": "object"
+    },
+    "DeckState": {
+      "$defs": {
+        "DeckId": {
+          "enum": [
+            "a",
+            "b"
+          ],
+          "title": "DeckId",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One deck. ``asset_id is None`` means the deck is idle.",
+      "properties": {
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        },
+        "deck_id": {
+          "$ref": "#/$defs/DeckId"
+        },
+        "gain_db": {
+          "default": 0.0,
+          "maximum": 6.0,
+          "minimum": -60.0,
+          "title": "Gain Db",
+          "type": "number"
+        },
+        "playing": {
+          "default": false,
+          "title": "Playing",
+          "type": "boolean"
+        },
+        "position_bar": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Position Bar",
+          "type": "integer"
+        },
+        "tempo_ratio": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 2.0,
+          "title": "Tempo Ratio",
+          "type": "number"
+        }
+      },
+      "required": [
+        "deck_id"
+      ],
+      "title": "DeckState",
+      "type": "object"
+    },
+    "Estimate": {
+      "additionalProperties": false,
+      "description": "A value the models produced, with how much to trust it.",
+      "properties": {
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "confidence"
+      ],
+      "title": "Estimate",
+      "type": "object"
+    },
+    "FeasibleAction": {
+      "$defs": {
+        "ActionType": {
+          "description": "The concrete things a decision can choose between (``LAYA_DATA.md:7-9``).",
+          "enum": [
+            "continue_current",
+            "transition",
+            "play_fallback_loop",
+            "layer_add",
+            "layer_remove",
+            "bass_swap"
+          ],
+          "title": "ActionType",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One concrete, already-validated option.\n\nMirrors the shape in ``ARCHITECTURE.md:52-62``. The fields are the *only* things a selector\nmay influence; there is deliberately no free-form command here.",
+      "properties": {
+        "action_id": {
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "action_type": {
+          "$ref": "#/$defs/ActionType"
+        },
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        },
+        "energy_fit": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Energy Fit",
+          "type": "number"
+        },
+        "entry_bar": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Entry Bar",
+          "type": "integer"
+        },
+        "fade_bars": {
+          "default": 0,
+          "maximum": 64,
+          "minimum": 0,
+          "title": "Fade Bars",
+          "type": "integer"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "start_at_session_bar": {
+          "minimum": 0,
+          "title": "Start At Session Bar",
+          "type": "integer"
+        },
+        "tempo_ratio": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.5,
+          "maximum": 2.0,
+          "title": "Tempo Ratio",
+          "type": "number"
+        },
+        "transition_preset": {
+          "default": "fade",
+          "title": "Transition Preset",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "action_type",
+        "start_at_session_bar"
+      ],
+      "title": "FeasibleAction",
+      "type": "object"
+    },
+    "GenerationBrief": {
+      "additionalProperties": false,
+      "description": "What to generate. The request the planner turns into one of these.",
+      "properties": {
+        "cfg_scale": {
+          "default": 1.2,
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "title": "Cfg Scale",
+          "type": "number"
+        },
+        "cot": {
+          "default": "full",
+          "title": "Cot",
+          "type": "string"
+        },
+        "energy_target": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Energy Target",
+          "type": "number"
+        },
+        "forbid_vocals": {
+          "default": false,
+          "title": "Forbid Vocals",
+          "type": "boolean"
+        },
+        "language": {
+          "default": "en",
+          "title": "Language",
+          "type": "string"
+        },
+        "lyrics": {
+          "default": "",
+          "title": "Lyrics",
+          "type": "string"
+        },
+        "style": {
+          "minLength": 1,
+          "title": "Style",
+          "type": "string"
+        },
+        "target_duration_s": {
+          "default": 180.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 900.0,
+          "title": "Target Duration S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "style"
+      ],
+      "title": "GenerationBrief",
+      "type": "object"
+    },
+    "GenerationJob": {
+      "$defs": {
+        "BackendKind": {
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "enum": [
+            "yue2.cpp",
+            "torch",
+            "audio.cpp"
+          ],
+          "title": "BackendKind",
+          "type": "string"
+        },
+        "CpuPolicy": {
+          "description": "How hard a model is allowed to work on the audio machine.\n\nThe docs treat generation competing with audio for CPU/GPU as a named risk\n(``ROADMAP.md:53``). A job may never be allowed to starve the audio callback.",
+          "enum": [
+            "full",
+            "realtime_safe"
+          ],
+          "title": "CpuPolicy",
+          "type": "string"
+        },
+        "GenerationBrief": {
+          "additionalProperties": false,
+          "description": "What to generate. The request the planner turns into one of these.",
+          "properties": {
+            "cfg_scale": {
+              "default": 1.2,
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "title": "Cfg Scale",
+              "type": "number"
+            },
+            "cot": {
+              "default": "full",
+              "title": "Cot",
+              "type": "string"
+            },
+            "energy_target": {
+              "default": 0.5,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Energy Target",
+              "type": "number"
+            },
+            "forbid_vocals": {
+              "default": false,
+              "title": "Forbid Vocals",
+              "type": "boolean"
+            },
+            "language": {
+              "default": "en",
+              "title": "Language",
+              "type": "string"
+            },
+            "lyrics": {
+              "default": "",
+              "title": "Lyrics",
+              "type": "string"
+            },
+            "style": {
+              "minLength": 1,
+              "title": "Style",
+              "type": "string"
+            },
+            "target_duration_s": {
+              "default": 180.0,
+              "exclusiveMinimum": 0.0,
+              "maximum": 900.0,
+              "title": "Target Duration S",
+              "type": "number"
+            }
+          },
+          "required": [
+            "style"
+          ],
+          "title": "GenerationBrief",
+          "type": "object"
+        },
+        "JobState": {
+          "description": "Background generation lifecycle (``PRODUCT.md:51``).",
+          "enum": [
+            "queued",
+            "running",
+            "analyzing",
+            "review_needed",
+            "ready",
+            "failed",
+            "canceled"
+          ],
+          "title": "JobState",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One unit of background work.",
+      "properties": {
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        },
+        "attempts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BackendKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "brief": {
+          "$ref": "#/$defs/GenerationBrief"
+        },
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "cpu_policy": {
+          "$ref": "#/$defs/CpuPolicy",
+          "default": "realtime_safe"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "family_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Family Id"
+        },
+        "gpu_index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Index"
+        },
+        "job_id": {
+          "minLength": 1,
+          "title": "Job Id",
+          "type": "string"
+        },
+        "max_attempts": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "priority": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "request_generation": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Request Generation",
+          "type": "integer"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "state": {
+          "$ref": "#/$defs/JobState",
+          "default": "queued"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "brief"
+      ],
+      "title": "GenerationJob",
+      "type": "object"
+    },
+    "GenerationResult": {
+      "$defs": {
+        "BackendKind": {
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "enum": [
+            "yue2.cpp",
+            "torch",
+            "audio.cpp"
+          ],
+          "title": "BackendKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "What a backend hands back. Every field is provenance, not just audio.",
+      "properties": {
+        "artifacts_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifacts Path"
+        },
+        "audio_path": {
+          "title": "Audio Path",
+          "type": "string"
+        },
+        "backend": {
+          "$ref": "#/$defs/BackendKind"
+        },
+        "content_sha256": {
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "duration_s": {
+          "exclusiveMinimum": 0.0,
+          "title": "Duration S",
+          "type": "number"
+        },
+        "finished_at": {
+          "format": "date-time",
+          "title": "Finished At",
+          "type": "string"
+        },
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Id"
+        },
+        "model_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Revision"
+        },
+        "peak_vram_mib": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Vram Mib"
+        },
+        "quantization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quantization"
+        },
+        "score_abc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Score Abc"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "wall_time_s": {
+          "minimum": 0.0,
+          "title": "Wall Time S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "job_id",
+        "backend",
+        "audio_path",
+        "content_sha256",
+        "duration_s",
+        "wall_time_s"
+      ],
+      "title": "GenerationResult",
+      "type": "object"
+    },
+    "KeyEstimate": {
+      "additionalProperties": false,
+      "description": "Musical key plus its confidence. Used for the harmonic compatibility filter.",
+      "properties": {
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "confidence"
+      ],
+      "title": "KeyEstimate",
+      "type": "object"
+    },
+    "LoopPoints": {
+      "additionalProperties": false,
+      "description": "An approved loop region. Must be beat-aligned to be schedulable.",
+      "properties": {
+        "beat_aligned": {
+          "default": false,
+          "title": "Beat Aligned",
+          "type": "boolean"
+        },
+        "end_bar": {
+          "minimum": 0,
+          "title": "End Bar",
+          "type": "integer"
+        },
+        "start_bar": {
+          "minimum": 0,
+          "title": "Start Bar",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_bar",
+        "end_bar"
+      ],
+      "title": "LoopPoints",
+      "type": "object"
+    },
+    "MusicalClock": {
+      "additionalProperties": false,
+      "description": "Position within the set, in musical time.",
+      "properties": {
+        "bar": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Bar",
+          "type": "integer"
+        },
+        "beat": {
+          "default": 0,
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Beat",
+          "type": "integer"
+        },
+        "beats_per_bar": {
+          "default": 4,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Beats Per Bar",
+          "type": "integer"
+        },
+        "bpm": {
+          "default": 120.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Bpm",
+          "type": "number"
+        }
+      },
+      "title": "MusicalClock",
+      "type": "object"
+    },
+    "Provenance": {
+      "$defs": {
+        "BackendKind": {
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "enum": [
+            "yue2.cpp",
+            "torch",
+            "audio.cpp"
+          ],
+          "title": "BackendKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Everything needed to reproduce an asset (``README.md:22``).\n\nA quantized render is a materially different artifact from a bf16 one, so the backend and its\nquant level are recorded here rather than treated as an implementation detail.",
+      "properties": {
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BackendKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "decoder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decoder Id"
+        },
+        "license": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License"
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Id"
+        },
+        "model_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Revision"
+        },
+        "quantization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quantization"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "source_hashes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Hashes",
+          "type": "array"
+        },
+        "source_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Prompt"
+        }
+      },
+      "title": "Provenance",
+      "type": "object"
+    },
+    "QualityReport": {
+      "additionalProperties": false,
+      "description": "The ingestion gates from ``ARCHITECTURE.md:46``.\n\nAll six must pass before an asset may be scheduled. ``passed`` is derived rather than stored\nso a caller cannot mark a failing asset ready by setting a flag.",
+      "properties": {
+        "audio_quality_ok": {
+          "default": false,
+          "title": "Audio Quality Ok",
+          "type": "boolean"
+        },
+        "beat_grid_ok": {
+          "default": false,
+          "title": "Beat Grid Ok",
+          "type": "boolean"
+        },
+        "decode_ok": {
+          "default": false,
+          "title": "Decode Ok",
+          "type": "boolean"
+        },
+        "duration_ok": {
+          "default": false,
+          "title": "Duration Ok",
+          "type": "boolean"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "loop_boundary_ok": {
+          "default": false,
+          "title": "Loop Boundary Ok",
+          "type": "boolean"
+        },
+        "loudness_ok": {
+          "default": false,
+          "title": "Loudness Ok",
+          "type": "boolean"
+        },
+        "notes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "object"
+        }
+      },
+      "title": "QualityReport",
+      "type": "object"
+    },
+    "RequestConstraints": {
+      "additionalProperties": false,
+      "description": "Hard limits a request imposes on candidate selection.",
+      "properties": {
+        "allowed_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Keys",
+          "type": "array"
+        },
+        "forbid_vocals": {
+          "default": false,
+          "title": "Forbid Vocals",
+          "type": "boolean"
+        },
+        "max_bpm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Bpm"
+        },
+        "max_energy": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Energy"
+        },
+        "max_tempo_ratio": {
+          "default": 1.06,
+          "exclusiveMinimum": 1.0,
+          "maximum": 1.5,
+          "title": "Max Tempo Ratio",
+          "type": "number"
+        },
+        "min_bpm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Bpm"
+        },
+        "min_energy": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Energy"
+        }
+      },
+      "title": "RequestConstraints",
+      "type": "object"
+    },
+    "RequestLog": {
+      "additionalProperties": false,
+      "description": "Append-only session history (``PRODUCT.md:53``).\n\nReproducibility is a stated design principle (``README.md:22``): request, selected assets,\naction, timing and outcome.",
+      "properties": {
+        "entries": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "RequestLog",
+      "type": "object"
+    },
+    "RequestStatus": {
+      "$defs": {
+        "RequestState": {
+          "description": "Live-request lifecycle. Transitions mirror ``ARCHITECTURE.md:75`` exactly.",
+          "enum": [
+            "received",
+            "interpreted",
+            "matched_ready",
+            "scheduled",
+            "applied",
+            "missing",
+            "queued",
+            "generating",
+            "validating",
+            "ready",
+            "failed",
+            "review_needed",
+            "superseded"
+          ],
+          "title": "RequestState",
+          "type": "string"
+        }
+      },
+      "description": "Live status of a request, with transitions validated against the state machine.",
+      "properties": {
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "generation": {
+          "minimum": 0,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Job Id"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RequestState",
+          "default": "received"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "generation"
+      ],
+      "title": "RequestStatus",
+      "type": "object"
+    },
+    "ScheduledAction": {
+      "additionalProperties": false,
+      "description": "A committed transition (``ARCHITECTURE.md:104``).\n\nCarries the asset's version and content hash so a scheduler decision cannot act on a file\nthat changed after the decision was made.",
+      "properties": {
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        },
+        "asset_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Sha256"
+        },
+        "asset_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Version"
+        },
+        "commit_bar": {
+          "minimum": 0,
+          "title": "Commit Bar",
+          "type": "integer"
+        },
+        "committed_at": {
+          "format": "date-time",
+          "title": "Committed At",
+          "type": "string"
+        },
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "fallback_action_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Action Id"
+        },
+        "generation": {
+          "minimum": 0,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "load_deadline": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Load Deadline"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "session_id",
+        "commit_bar",
+        "generation"
+      ],
+      "title": "ScheduledAction",
+      "type": "object"
+    },
+    "SectionMarker": {
+      "additionalProperties": false,
+      "description": "A detected structural section, expressed in bars so it survives tempo changes.",
+      "properties": {
+        "end_bar": {
+          "minimum": 0,
+          "title": "End Bar",
+          "type": "integer"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "section_id": {
+          "title": "Section Id",
+          "type": "string"
+        },
+        "start_bar": {
+          "minimum": 0,
+          "title": "Start Bar",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "section_id",
+        "kind",
+        "start_bar",
+        "end_bar"
+      ],
+      "title": "SectionMarker",
+      "type": "object"
+    },
+    "SessionState": {
+      "$defs": {
+        "DeckId": {
+          "enum": [
+            "a",
+            "b"
+          ],
+          "title": "DeckId",
+          "type": "string"
+        },
+        "DeckState": {
+          "additionalProperties": false,
+          "description": "One deck. ``asset_id is None`` means the deck is idle.",
+          "properties": {
+            "asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Asset Id"
+            },
+            "deck_id": {
+              "$ref": "#/$defs/DeckId"
+            },
+            "gain_db": {
+              "default": 0.0,
+              "maximum": 6.0,
+              "minimum": -60.0,
+              "title": "Gain Db",
+              "type": "number"
+            },
+            "playing": {
+              "default": false,
+              "title": "Playing",
+              "type": "boolean"
+            },
+            "position_bar": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Position Bar",
+              "type": "integer"
+            },
+            "tempo_ratio": {
+              "default": 1.0,
+              "exclusiveMinimum": 0.0,
+              "maximum": 2.0,
+              "title": "Tempo Ratio",
+              "type": "number"
+            }
+          },
+          "required": [
+            "deck_id"
+          ],
+          "title": "DeckState",
+          "type": "object"
+        },
+        "MusicalClock": {
+          "additionalProperties": false,
+          "description": "Position within the set, in musical time.",
+          "properties": {
+            "bar": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Bar",
+              "type": "integer"
+            },
+            "beat": {
+              "default": 0,
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Beat",
+              "type": "integer"
+            },
+            "beats_per_bar": {
+              "default": 4,
+              "maximum": 32,
+              "minimum": 1,
+              "title": "Beats Per Bar",
+              "type": "integer"
+            },
+            "bpm": {
+              "default": 120.0,
+              "exclusiveMinimum": 0.0,
+              "title": "Bpm",
+              "type": "number"
+            }
+          },
+          "title": "MusicalClock",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A running set.\n\n``generation`` increments on every accepted user request. A scheduled action carries the\ngeneration it was planned under, so a late-arriving generation result cannot reverse the\nlistener's latest direction (``ARCHITECTURE.md:81``).",
+      "properties": {
+        "active_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Request Id"
+        },
+        "clock": {
+          "$ref": "#/$defs/MusicalClock"
+        },
+        "committed_action_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Committed Action Id"
+        },
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "decks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeckState"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/DeckId"
+          },
+          "title": "Decks",
+          "type": "object"
+        },
+        "energy": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Energy",
+          "type": "number"
+        },
+        "fallback_asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Asset Id"
+        },
+        "generation": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "theme": {
+          "minLength": 1,
+          "title": "Theme",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "theme"
+      ],
+      "title": "SessionState",
+      "type": "object"
+    },
+    "UserRequest": {
+      "$defs": {
+        "RequestClass": {
+          "description": "How a user request should be satisfied (``PRODUCT.md:33-37``).",
+          "enum": [
+            "immediate_control",
+            "ready_library",
+            "generation_dependent"
+          ],
+          "title": "RequestClass",
+          "type": "string"
+        },
+        "RequestConstraints": {
+          "additionalProperties": false,
+          "description": "Hard limits a request imposes on candidate selection.",
+          "properties": {
+            "allowed_keys": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Allowed Keys",
+              "type": "array"
+            },
+            "forbid_vocals": {
+              "default": false,
+              "title": "Forbid Vocals",
+              "type": "boolean"
+            },
+            "max_bpm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Bpm"
+            },
+            "max_energy": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Energy"
+            },
+            "max_tempo_ratio": {
+              "default": 1.06,
+              "exclusiveMinimum": 1.0,
+              "maximum": 1.5,
+              "title": "Max Tempo Ratio",
+              "type": "number"
+            },
+            "min_bpm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Min Bpm"
+            },
+            "min_energy": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Min Energy"
+            }
+          },
+          "title": "RequestConstraints",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A parsed live request. Immutable once accepted.",
+      "properties": {
+        "constraints": {
+          "$ref": "#/$defs/RequestConstraints"
+        },
+        "contract_revision": {
+          "default": "1.0.0",
+          "title": "Contract Revision",
+          "type": "string"
+        },
+        "contract_version": {
+          "default": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "generation": {
+          "minimum": 0,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "received_at": {
+          "format": "date-time",
+          "title": "Received At",
+          "type": "string"
+        },
+        "request_class": {
+          "$ref": "#/$defs/RequestClass"
+        },
+        "request_id": {
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "target_energy": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Target Energy",
+          "type": "number"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "session_id",
+        "generation",
+        "text",
+        "request_class"
+      ],
+      "title": "UserRequest",
+      "type": "object"
+    }
+  }
+}

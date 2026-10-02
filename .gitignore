@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Local runtime state (never commit user sessions or logs)
+var/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+runtime/
+
+# Docker
+
+# Fine-tuning runs and checkpoints. Weights are separate artifacts under their own licence
+# (YuE2 CC BY-NC 4.0), so they must never be committed.
+runs/
+*.safetensors
+*.gguf
+
+# Audio + model artifacts. Source, weights, audio and datasets stay separate
+# downloads governed by their own terms. See ROADMAP.md "Risks to test early".
+assets/generated/
+assets/library/
+assets/audio/
+models/
+weights/
+data/sessions/
+
+# Keys
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
