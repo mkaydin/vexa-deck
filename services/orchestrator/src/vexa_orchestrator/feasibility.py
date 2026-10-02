@@ -259,6 +259,13 @@ class FeasibilityFilter:
             Rejection(asset.asset_id, reason)
         )
 
+        # Transitioning to the asset already playing is a no-op at best. The filter is given the
+        # current asset precisely so it can exclude it; without that check the menu offers "go to
+        # the track you are on", and a selector is free to pick it.
+        if current_asset is not None and asset.asset_id == current_asset.asset_id:
+            reject("already playing")
+            return None
+
         if reason := self.asset_is_playable(asset):
             reject(reason)
             return None

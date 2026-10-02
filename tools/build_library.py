@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "services/audio/src"))
 sys.path.insert(0, str(ROOT / "workers/yue2/src"))
 
-from vexa_contracts import ApprovalState  # noqa: E402
+from vexa_contracts import ApprovalState, AssetManifest, Estimate  # noqa: E402
 from vexa_yue2.backends import primary_gpu  # noqa: E402
 from vexa_yue2.gates import GateThresholds, analyse  # noqa: E402
 from vexa_yue2.master import master  # noqa: E402
@@ -48,6 +48,7 @@ class BriefSpec:
     style: str
     lyrics: str
     energy: float
+    mood: str = ""
     cot: str = "off"
     duration_s: float = 40.0
 
@@ -55,33 +56,63 @@ class BriefSpec:
 #: `cot="off"` is deliberate for a first library: symbolic planning roughly doubles render time,
 #: and these exist to prove the pipeline and give the filters something real to select against.
 #: Plan-then-edit is exercised separately once the basics are green.
+#: Tempo *clusters* rather than a spread. A selector can only usefully choose between
+#: assets that are close enough to transition into, so five briefs at 92-125 BPM produced
+#: mostly-empty menus. These cluster around the tempi a DJ would actually move between.
 BRIEFS: list[BriefSpec] = [
     BriefSpec(
         "calm-jazz-bed", "instrumental jazz, brushed drums, upright bass, warm Rhodes, "
         "slow and rain-soaked, no vocals, no guitar",
-        "", energy=0.15, duration_s=45,
-    ),
-    BriefSpec(
-        "warm-deep-house", "instrumental deep house, warm sub bass, Rhodes chords, soft "
-        "claps, steady four to the floor, no vocals",
-        "", energy=0.45, duration_s=45,
-    ),
-    BriefSpec(
-        "bright-peak-house", "instrumental peak-time house, driving drums, bright synth "
-        "stabs, relentless energy, no vocals",
-        "", energy=0.8, duration_s=45,
+        "", energy=0.15, mood="rain-soaked", duration_s=45,
     ),
     BriefSpec(
         "moody-downtempo", "instrumental downtempo, muted Rhodes, sub bass, brushed "
         "percussion, dark and sparse, no vocals",
-        "", energy=0.25, duration_s=45,
+        "", energy=0.25, mood="dark", duration_s=45,
     ),
     BriefSpec(
         "late-night-drive", "instrumental synthwave, analog pads, gated drums, warm bass, "
         "night drive, no vocals",
-        "", energy=0.6, duration_s=45,
+        "", energy=0.60, mood="driving", duration_s=45,
+    ),
+    BriefSpec(
+        "warm-deep-house", "instrumental deep house, warm sub bass, Rhodes chords, soft "
+        "claps, steady four to the floor, no vocals",
+        "", energy=0.45, mood="warm", duration_s=45,
+    ),
+    BriefSpec(
+        "deep-house-b", "instrumental deep house, deep bass, muted chords, steady drums, "
+        "no vocals", "", energy=0.50, mood="warm", duration_s=45,
+    ),
+    BriefSpec(
+        "house-a", "instrumental house, bright plucks, four on the floor, no vocals",
+        "", energy=0.58, mood="bright", duration_s=45,
+    ),
+    BriefSpec(
+        "house-b", "instrumental house, rolling bassline, soft percussion, no vocals",
+        "", energy=0.62, mood="bright", duration_s=45,
+    ),
+    BriefSpec(
+        "bright-peak-house", "instrumental peak-time house, driving drums, bright synth "
+        "stabs, relentless energy, no vocals",
+        "", energy=0.80, mood="peak", duration_s=45,
+    ),
+    BriefSpec(
+        "peak-b", "instrumental peak-time techno, relentless kick, acid lines, no vocals",
+        "", energy=0.85, mood="peak", duration_s=45,
+    ),
+    BriefSpec(
+        "downtempo-b", "instrumental downtempo, dusty drums, warm pads, no vocals",
+        "", energy=0.30, mood="dark", duration_s=45,
     ),
 ]
+
+
+def _write_manifest(manifest: AssetManifest) -> None:
+    """Persist the manifest next to its audio, so the library is self-describing."""
+    (OUT / f"{manifest.asset_id}.json").write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8"
+    )
 
 
 def check(label: str, condition: bool, detail: str = "") -> bool:
@@ -191,6 +222,18 @@ def main() -> int:
 
         manifest = outcome.manifest
         ok = outcome.quality.passed
+        if manifest is not None and ok:
+            # Measurements come from the analyser; *intent* comes from the brief. Without these
+            # tags every energy filter is inert, because nothing knows what a track is for.
+            tagged = manifest.model_copy(update={
+                "tags": {
+                    "energy": [Estimate(value=f"{spec.energy}", confidence=1.0)],
+                    "mood": [Estimate(value=spec.mood, confidence=0.9)],
+                    "instrumental": [Estimate(value="true", confidence=1.0)],
+                }
+            })
+            _write_manifest(tagged)
+            manifest = tagged
         if ok:
             admitted += 1
         else:
