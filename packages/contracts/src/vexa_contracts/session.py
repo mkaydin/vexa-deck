@@ -62,8 +62,20 @@ class MusicalClock(BaseModel):
         return self.bar * self.beats_per_bar + self.beat
 
     @property
+    def beats_per_second(self) -> float:
+        return self.bpm / 60.0
+
+    @property
     def seconds_per_bar(self) -> float:
-        return 240.0 * self.beats_per_bar / self.bpm
+        """Seconds in one bar.
+
+        ``60 * beats_per_bar / bpm``: at 120 BPM in 4/4 that is 2.0 s, which is right -- two beats
+        per second, four to a bar.
+
+        This was previously ``240 * beats_per_bar / bpm``, a 4x error that made every
+        bars-to-seconds conversion in the system wrong by exactly one time signature.
+        """
+        return 60.0 * self.beats_per_bar / self.bpm
 
     def bars_until(self, target_bar: int) -> int:
         return max(0, target_bar - self.bar)

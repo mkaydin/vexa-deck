@@ -343,3 +343,42 @@ def test_user_request_rejects_an_inverted_energy_band():
 def test_manifests_survive_a_json_round_trip():
     asset = make_asset()
     assert AssetManifest.model_validate_json(asset.model_dump_json()) == asset
+
+# --- bars and seconds -------------------------------------------------------
+
+
+@pytest.mark.parametrize("bpm,beats_per_bar,expected", [
+    (120.0, 4, 2.00),   # 2 beats/second, 4 to a bar
+    (120.0, 3, 1.50),
+    (60.0, 4, 4.00),
+    (90.0, 4, 2.6666667),
+])
+def test_seconds_per_bar_is_the_beat_arithmetic(bpm, beats_per_bar, expected):
+    """A bar is `beats_per_bar` beats at `bpm`.
+
+    This was 4x too long (240 instead of 60), which silently corrupted every bars-to-seconds
+    conversion in the system — crossfade lengths, loop lengths, cue positions.
+    """
+    clock = MusicalClock(bpm=bpm, beats_per_bar=beats_per_bar)
+    assert clock.seconds_per_bar == pytest.approx(expected, abs=1e-4)
+    assert clock.seconds_per_bar == pytest.approx(
+        beats_per_bar / (bpm / 60.0), abs=1e-6
+    )
+
+
+def test_beat_and_bar_conversions_agree():
+    """The engine clock (which has a sample rate) must agree with the session clock."""
+    from vexa_audio.queue import Clock
+
+    session_clock = MusicalClock(bpm=128.0, beats_per_bar=7)
+    engine_clock = Clock(sample_rate=48000, bpm=128.0, beats_per_bar=7)
+    assert engine_clock.samples_per_bar / 48000 == pytest.approx(session_clock.seconds_per_bar)
+    assert engine_clock.samples_per_beat == pytest.approx(48000 * 60.0 / 128.0)
+
+
+def test_two_bars_advance_the_clock_by_two_bars():
+    from vexa_audio.queue import Clock
+
+    clock = Clock(sample_rate=44100, bpm=120.0)
+    clock.advance(int(clock.samples_per_bar * 2))
+    assert clock.bar == 2

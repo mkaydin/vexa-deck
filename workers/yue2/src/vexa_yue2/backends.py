@@ -163,12 +163,13 @@ class SubprocessBackend(GenerationBackend):
         self.last_peak_vram_mib: int | None = None
 
     def executable(self) -> str:
+        """Locate the backend binary: an explicit path, then PATH."""
         name = self.binary or self.capability.executable or ""
         found = shutil.which(name) or (name if Path(name).is_file() else None)
         if not found:
             raise BackendUnavailable(
                 f"{self.kind.value}: executable {name!r} not found on PATH. "
-                "Install the backend separately; model weights are never bundled."
+                "Build the backend separately; model weights are never bundled."
             )
         return found
 

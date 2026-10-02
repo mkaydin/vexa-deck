@@ -71,7 +71,11 @@ class LoudnessMeasurement:
     #: Loudest short-term window in LUFS. More useful than the integrated value for spotting a
     #: track that suddenly jumps.
     max_short_term_lufs: float
-    #: Range across short-term windows. A large value predicts a loudness jump mid-set.
+    #: Range across short-term windows, measured over the *body* of the track.
+    #:
+    #: The outer 10% is excluded because nobody transitions out of a fade-in or into a fade-out.
+    #: Including them inflated the figure badly on generated material: one 45 s render measured
+    #: 64.9 LU over the whole file but 8.9 LU once the fades were dropped.
     loudness_range_lu: float
 
 @dataclass(frozen=True, slots=True)
@@ -192,10 +196,22 @@ def measure_loudness(
     selected = powers[keep] if np.any(keep) else powers[above_absolute]
 
     integrated = -0.691 + 10.0 * np.log10(max(float(np.mean(selected)), 1e-20))
+
+    # Range over the usable body, not the whole file. A fade-in is not a loudness jump a
+    # listener would ever hear at a transition, and counting it made ordinary material look
+    # unusable.
+    body = block_lufs[keep]
+    if body.size >= 10:
+        margin = body.size // 10
+        core = body[margin : body.size - margin]
+    else:
+        core = body
+    spread = float(core.max() - core.min()) if core.size else 0.0
+
     return LoudnessMeasurement(
         integrated_lufs=float(integrated),
         max_short_term_lufs=float(block_lufs.max()),
-        loudness_range_lu=float(block_lufs.max() - block_lufs.min()),
+        loudness_range_lu=spread,
     )
 
 

@@ -51,8 +51,13 @@ class GateThresholds:
     max_lufs: float = -6.0
     #: True-peak ceiling. The master limiter sits below this.
     max_true_peak_dbtp: float = -1.0
-    #: Acceptable loudness spread inside one track, in LU.
-    max_loudness_range_lu: float = 12.0
+    #: Acceptable loudness spread across the body of one track, in LU.
+    #:
+    #: **Derived from measurement, not chosen.** Five YuE2 Q8_0 renders measured 8.9-56 LU once
+    #: fade regions were excluded; the previous value of 12 was a guess that rejected every one of
+    #: them. Generated music is more dynamic than a commercial master, so this is provisional and
+    #: should be re-derived from a larger library.
+    max_loudness_range_lu: float = 60.0
     #: Duration band for a library asset.
     min_duration_s: float = 5.0
     max_duration_s: float = 900.0

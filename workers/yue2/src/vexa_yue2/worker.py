@@ -51,6 +51,9 @@ class WorkerConfig:
     analysis_tempo: bool = True
     #: Devices this worker may claim, by name fragment. Empty means "any".
     allowed_devices: tuple[str, ...] = ()
+    #: Where the built backend lives, when it is not on PATH. YuE2's C++ runtime is an external
+    #: binary that is never bundled, so this points at a local build rather than naming one.
+    backend_binary: Path | None = None
 
 
 @dataclass(slots=True)

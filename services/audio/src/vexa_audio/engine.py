@@ -76,6 +76,10 @@ class AudioEngine:
         self._stream = None
         self._lock = threading.Lock()
 
+    @property
+    def sample_rate(self) -> int:
+        return self.config.sample_rate
+
     # -- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
