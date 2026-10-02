@@ -35,7 +35,9 @@ from .backends import (
     GenerationBackend,
     GenerationFailed,
     device_vram_mib,
+    primary_gpu,
     resolve_device,
+    secondary_gpu,
 )
 from .gates import GateThresholds, analyse
 
@@ -49,7 +51,7 @@ class WorkerConfig:
     thresholds: GateThresholds = field(default_factory=GateThresholds)
     #: Beats per second of tempo analysis; lower is faster and less precise.
     analysis_tempo: bool = True
-    #: Devices this worker may claim, by name fragment. Empty means "any".
+    #: Devices this worker may claim, by name. Empty means "primary, then secondary".
     allowed_devices: tuple[str, ...] = ()
     #: Where the built backend lives, when it is not on PATH. YuE2's C++ runtime is an external
     #: binary that is never bundled, so this points at a local build rather than naming one.
@@ -83,10 +85,16 @@ class BackendSelector:
         self.config = config or WorkerConfig()
 
     def devices(self) -> list[int]:
+        """Claimable devices, strongest first.
+
+        The 5060 Ti is primary: it is the only card whose architecture is natively compiled into
+        torch, and it has the headroom for the bf16 reference pipeline. The 4060 is secondary and
+        can still take a Q8_0 GGUF render.
+        """
         if self.config.allowed_devices:
             found = [resolve_device(name) for name in self.config.allowed_devices]
             return [i for i in found if i is not None]
-        return [0, 1]
+        return [primary_gpu(), secondary_gpu()]
 
     def choose(self, job: GenerationJob) -> tuple[GenerationBackend | None, int | None, str]:
         """Return ``(backend, gpu_index, reason)``. ``None`` backend means nothing can take it."""

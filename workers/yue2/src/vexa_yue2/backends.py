@@ -77,6 +77,25 @@ CAPABILITIES: dict[BackendKind, BackendCapability] = {
 }
 
 
+#: The project's primary and secondary devices, by name.
+#:
+#: nvidia-smi index 0 is the 5060 Ti while CUDA device 0 is the 4060, so any index-based default
+#: silently lands on the wrong card. Every selection resolves through ``resolve_device``.
+PRIMARY_GPU_NAME = "RTX 5060 Ti"
+SECONDARY_GPU_NAME = "RTX 4060"
+
+
+def primary_gpu() -> int:
+    """Index of the 5060 Ti, or 0 if it is absent."""
+    return resolve_device(PRIMARY_GPU_NAME) or 0
+
+
+def secondary_gpu() -> int:
+    """Index of the 4060, falling back to the primary if only one card is present."""
+    found = resolve_device(SECONDARY_GPU_NAME)
+    return primary_gpu() if found is None else found
+
+
 def device_vram_mib(index: int) -> int:
     """Total VRAM of a CUDA device, in MiB. 0 when torch is unavailable."""
     try:
@@ -318,7 +337,7 @@ class TorchBackend(GenerationBackend):
             from yue2 import YuE2Pipeline  # noqa: F401
         except ImportError as exc:
             return False, f"torch backend not installed ({exc})"
-        if device_vram_mib(resolve_device("5060") or 0) < self.capability.peak_vram_mib:
+        if device_vram_mib(primary_gpu()) < self.capability.peak_vram_mib:
             return False, "no device with enough VRAM for the bf16 reference pipeline"
         return True, "ok"
 
@@ -329,7 +348,7 @@ class TorchBackend(GenerationBackend):
             from yue2 import YuE2Pipeline
         except ImportError as exc:
             raise BackendUnavailable(f"yue2 is not installed: {exc}") from exc
-        device = self._device or f"cuda:{resolve_device('5060') or 0}"
+        device = self._device or f"cuda:{primary_gpu()}"
         self._pipeline = YuE2Pipeline.from_pretrained(self.checkpoint, device=device)
         return self._pipeline
 

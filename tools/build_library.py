@@ -29,7 +29,9 @@ sys.path.insert(0, str(ROOT / "services/audio/src"))
 sys.path.insert(0, str(ROOT / "workers/yue2/src"))
 
 from vexa_contracts import ApprovalState  # noqa: E402
+from vexa_yue2.backends import primary_gpu  # noqa: E402
 from vexa_yue2.gates import GateThresholds, analyse  # noqa: E402
+from vexa_yue2.master import master  # noqa: E402
 
 BACKEND = ROOT / "third_party" / "yue2.cpp"
 BINARY = BACKEND / "build" / "yue-synth"
@@ -131,7 +133,10 @@ def render(spec: BriefSpec, *, gpu: int, max_seq: int, steps: int) -> tuple[Path
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=len(BRIEFS), help="how many briefs to render")
-    parser.add_argument("--gpu", type=int, default=0, help="CUDA device index")
+    parser.add_argument(
+        "--gpu", type=int, default=None,
+        help="CUDA device index; defaults to the primary (RTX 5060 Ti)",
+    )
     parser.add_argument("--max-seq", type=int, default=8192,
                         help="KV cache size; trades song length for VRAM")
     parser.add_argument("--steps", type=int, default=32, help="flow matching steps")
@@ -147,21 +152,29 @@ def main() -> int:
             print(f"error: weights missing at {path}", file=sys.stderr)
             return 1
 
+    gpu = args.gpu if args.gpu is not None else primary_gpu()
     print(f"backend : {BINARY.name}")
     print("weights : Q8_0 backbone + F32 VAE")
-    print(f"device  : cuda:{args.gpu}   max-seq {args.max_seq}   steps {args.steps}")
+    print(f"device  : cuda:{gpu}   max-seq {args.max_seq}   steps {args.steps}")
     print(f"briefs  : {args.count} of {len(BRIEFS)}\n")
 
     admitted, quarantined, total_time = 0, 0, 0.0
     for spec in BRIEFS[: args.count]:
         print(f"[{spec.name}] energy {spec.energy:.2f}  cot={spec.cot}")
         try:
-            wav, elapsed = render(spec, gpu=args.gpu, max_seq=args.max_seq, steps=args.steps)
+            wav, elapsed = render(spec, gpu=gpu, max_seq=args.max_seq, steps=args.steps)
         except RuntimeError as exc:
             print(f"  [FAIL] {exc}")
             quarantined += 1
             continue
         total_time += elapsed
+
+        # Master before analysing. A raw render peaks at or above 0 dBTP with 30-65 LU of range,
+        # which leaves no crossfade headroom and makes every transition a loudness jump.
+        report = master(wav)
+        print(f"  mastered {report.input_lufs:.1f} -> {report.output_lufs:.1f} LUFS, "
+              f"peak {report.input_peak_dbtp:.2f} -> {report.output_peak_dbtp:.2f} dBTP"
+              f"{' (limited)' if report.limited else ''}")
 
         outcome = analyse(
             wav,

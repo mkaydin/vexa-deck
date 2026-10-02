@@ -22,7 +22,7 @@ These come from the project owner and are treated as settled.
 | D3 | The LLM integration is **OpenAI-compatible**, not vendor-pinned | Any `/v1/chat/completions` endpoint works. The planner can be pointed at OpenAI, a local llama.cpp/vLLM server, LM Studio, or any compatible gateway with a config change. See §5.3 |
 | D4 | Model inference runs **locally on this host**, never in Docker | Preserves GPU passthrough, avoids CUDA-in-container friction, keeps weights on local disk. See §4 |
 | D5 | Services run in **Docker containers** | Orchestrator, planner, library/index, analyzer, and job queue are containerized for reproducible dependencies and clean restarts |
-| D6 | Two GPUs are available: RTX 5060 Ti (16 GB) and RTX 4060 (8 GB) | Pinned split in §3. Verified against measured VRAM, not assumed |
+| D6 | Two GPUs: **RTX 5060 Ti (16 GB) is primary**, RTX 4060 (8 GB) secondary | Primary takes generation, fine-tuning and the bf16 reference pipeline; the secondary holds Laya inference and can take a Q8_0 GGUF render concurrently. Resolved by name, never index — §3.1 |
 | D7 | YuE2 runs through a **pluggable generation backend**, defaulting to a quantized GGUF build | Both GPUs become generation-capable and generation can run concurrently. Backends: `yue2.cpp` GGUF (3.8–5.8 GB), `torch` BF16 (11.18 GiB, reference), `audio.cpp` GGUF (7755–8867 MiB). Chosen by Phase B0 measurement, not assumption. See §3.4 |
 
 ---
@@ -202,9 +202,13 @@ measurement decides is queue behaviour and how many workers we can usefully run 
 One owner per GPU at a time. A simple lease queue in the orchestrator:
 
 ```
-GPU 0 lease: [ yue2 torch job (exclusive) ]  OR  [ laya finetune run (exclusive) ]
-GPU 1 lease: [ yue2 gguf job (exclusive) ]  OR  [ laya inference (resident, ~0.85 GB) ]
+5060 Ti (primary)  : [ yue2 torch job ]  OR  [ yue2 gguf job ]  OR  [ laya finetune ]
+4060  (secondary)  : [ yue2 gguf job ]   OR  [ laya inference, resident ~0.85 GB ]
 ```
+
+`workers/yue2/backends.py` owns the device table (`PRIMARY_GPU_NAME`, `primary_gpu()`,
+`secondary_gpu()`), so "primary" means one thing everywhere rather than a default repeated across
+call sites.
 
 Laya *inference* stays resident on GPU 1 — it is a few hundred MB and needs to answer inside a
 scheduling deadline. A GGUF generation job takes the rest of that card. Fine-tuning is a batch
@@ -604,6 +608,8 @@ Not oversights. From `PRODUCT.md:56-61` and `IDEAS.md:53-57`.
 | `PRODUCT.md` | User journeys and acceptance criteria. Authoritative for *what the product is* |
 | `ARCHITECTURE.md` | Service semantics, asset model, scheduling. Authoritative for *contract meaning* |
 | `LAYA_DATA.md` | Dataset sources, labeling, evaluation, provenance. Authoritative for *data policy* |
+| `DATASETS.md` | **Verified** dataset status, licences and what each one can and cannot teach. Supersedes `LAYA_DATA.md` where they disagree |
+| `FINETUNE.md` | The fine-tune runbook: measured facts, bugs found, promotion gates |
 | `VISUAL_DIRECTION.md` | Pixel-art GUI and Vexa character brief. Authoritative for *look* |
 | `IDEAS.md` | Optional experiments. Authoritative for *what comes after the core* |
 
