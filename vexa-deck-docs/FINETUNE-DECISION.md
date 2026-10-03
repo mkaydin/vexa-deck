@@ -143,7 +143,7 @@ good" may differ between synthesised loops and dense generative audio.
 This is a real risk and shadow mode is precisely the mechanism for catching it. It does not
 invalidate the approach; it bounds the claim.
 
-### Strudel — the strongest candidate, with one caveat
+### Strudel — the strongest candidate
 
 **Strudel** (<https://strudel.cc>) is a JavaScript port of the TidalCycles pattern language,
 browser-first. It renders through WebAudio, so a headless renderer needs browser automation —
@@ -172,15 +172,32 @@ $ wirbel house.strudel --format wav --duration 12 --json
 Worth noting: `jebin2/strudel-render` advertises *"Pure renderer; loopability is config"* —
 directly relevant, since a DJ library wants loopable beds.
 
-**The caveat, and it matters:** my analyzer measured **130.8 BPM against a requested 124**, with
-beat confidence **0.00**. Synthesised material defeats our beat tracker, because a held
-four-on-the-floor kick is not the onset structure a tracker expects. Also -27.65 LUFS with true
-peak -14.66 dBTP — quiet, needing gain.
+I first measured **130.8 BPM against a requested 124, confidence 0.00**, and recorded beat
+detection as a blocker. **That was my error, not a defect.** The pattern used `setcpm`, which is
+cycles per *minute*; wirbel divided by 60 again, so the 12 s render contained **0.103 cycles —
+about 0.4 beats**. One detected onset was the correct answer to a near-silent clip. `setcps` is
+the right call.
 
-So Strudel gives near-perfect tempo *ground truth* (it is specified), but **our verification of
-it is currently broken.** Fixing beat detection for synthetic material is a prerequisite, not a
-detail — and it is worth fixing regardless, because the same failure mode would hit any
-perfectly-quantised material in the depot.
+Re-tested across the range, with the corrected pattern:
+
+| Requested | Measured | Error | Confidence | Stable grid |
+|---|---|---|---|---|
+| 90 | 90.7 | 0.81 % | 1.00 | yes |
+| 105 | 104.2 | 0.79 % | 1.00 | yes |
+| 124 | 125.0 | 0.81 % | 1.00 | yes |
+| 140 | 140.6 | 0.45 % | 1.00 | yes |
+| 174 | 175.8 | 1.02 % | 1.00 | yes |
+
+**Beat detection works on synthetic material.** YuE2 library re-checked at the same time — no
+regression, all six tracks still at confidence 1.00.
+
+The real finding is narrower and more useful: **measured tempo carries ~1 % error**, from frame
+quantisation at `REFERENCE_RATE` 48 kHz with a 512-hop. So when the generator *specified* the
+tempo, we store the specified value and treat measurement as **verification, not metadata**.
+That distinction matters more for the depot than the bug did.
+
+One genuine issue remains: the render measured **-27.65 LUFS**, below our -24 floor. Our existing
+mastering stage fixes it.
 
 ### Decision
 
@@ -196,8 +213,8 @@ wirbel is **AGPL-3.0-only**. Both are fine for this non-commercial project but n
 permissive, so patterns and rendered audio must be kept as separate artefacts, never vendored
 into the source tree.
 
-**Open item:** beat detection on synthesised material. Until it works, Strudel output cannot be
-trusted to the same gate as YuE2 output.
+**Tempo handling:** store the generator's specified tempo; use the measured value as a gate
+(reject beyond ~2 % disagreement), never as the stored metadata.
 
 ---
 
