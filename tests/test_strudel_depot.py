@@ -28,8 +28,17 @@ from build_strudel_depot import (  # noqa: E402
     METRICAL_MULTIPLIERS,
     MOODS,
     TEMPO_CLUSTERS,
+    _rescale_bars,
     build_specs,
     pattern_for,
+)
+from vexa_contracts import (  # noqa: E402
+    AssetManifest,
+    AudioProperties,
+    BeatGrid,
+    LoopPoints,
+    SectionMarker,
+    SourceType,
 )
 
 
@@ -109,19 +118,43 @@ def test_metrical_gate_still_rejects_a_broken_render() -> None:
     assert _best_level(61.3, 88.0) is None
     assert _best_level(88.0, 122.0) is None
 
-def test_tempo_override_cannot_leave_markers_past_the_end() -> None:
-    """Overriding the tempo re-scales bar numbers, so markers can end up outside the asset.
+def test_bar_rescale_keeps_a_whole_track_section() -> None:
+    """Rescaling must preserve the entry point, which filtering markers out destroyed.
 
-    ``analyse`` converts detected boundaries to bars using the *measured* tempo. A track read at
-    175.8 is counted as 23 bars; stored at the specified 88 the same 32 s of audio is 11 bars,
-    and ``AssetManifest`` refuses to load a section ending past the end. Nineteen manifests hit
-    exactly this before it was fixed.
+    A first attempt dropped markers past the end and left 55 assets unplayable: on a short track
+    the only section *is* the whole track, so discarding it left ``FeasibilityFilter`` with nothing
+    to enter at. Markers are converted and clamped instead.
     """
     duration_s, specified_bpm, measured_bpm = 32.0, 88.0, 175.8
-    bars_measured = int(duration_s / (240.0 / measured_bpm))
-    bars_specified = int(duration_s / (240.0 / specified_bpm))
-    assert bars_measured > bars_specified  # the precondition that made this reachable
+    measured_bars = int(duration_s / (240.0 / measured_bpm))
+    total_bars = int(duration_s / (240.0 / specified_bpm))
+    assert measured_bars > total_bars, "precondition: analysis counted more bars than exist"
 
-    sections = [{"section_id": "s0", "kind": "segment", "start_bar": 0, "end_bar": bars_measured}]
-    kept = [s for s in sections if s["end_bar"] < bars_specified]
-    assert kept == [], "a section ending past the stored tempo's last bar must be dropped"
+    scale = specified_bpm / measured_bpm
+    last = total_bars - 1
+    converted = lambda value: max(0, min(round(value * scale), last))  # noqa: E731
+
+    assert converted(0) == 0
+    assert converted(measured_bars) <= last, "clamped inside the stored track length"
+    assert converted(measured_bars) > 0, "a whole-track section must survive rescaling"
+
+
+def test_bar_rescale_is_identity_when_tempo_agrees() -> None:
+    """A measurement that agrees must not move a single marker."""
+    manifest = AssetManifest(
+        asset_id="a1",
+        family_id="family_a1",
+        source_type=SourceType.PACK_IMPORT,
+        content_sha256="a" * 64,
+        audio=AudioProperties(
+            codec="wav", sample_rate_hz=48000, channels=2,
+            duration_s=40.0, integrated_lufs=-14.0, true_peak_dbtp=-1.5,
+        ),
+        beat_grid=BeatGrid(bpm=120.0, grid_version=1, confidence=1.0),
+        sections=[SectionMarker(section_id="s0", kind="segment", start_bar=0, end_bar=19)],
+        loops=[LoopPoints(start_bar=0, end_bar=8, beat_aligned=True)],
+    )
+    _rescale_bars(manifest, 1.0)
+
+    assert [(s.start_bar, s.end_bar) for s in manifest.sections] == [(0, 19)]
+    assert [(loop.start_bar, loop.end_bar) for loop in manifest.loops] == [(0, 8)]

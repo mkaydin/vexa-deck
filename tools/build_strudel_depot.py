@@ -297,17 +297,15 @@ def admit(
     # Store what was *specified*. Measured tempo carries ~1 % error from frame quantisation at
     # 48 kHz with a 512 hop, so it is a gate, not metadata.
     #
-    # Overriding the tempo invalidates the section markers, which ``analyse`` converted to bars
-    # using the *measured* rate. A track read at 175.8 is counted as 23 bars; stored at 88 the
-    # same audio is 11 bars, so every marker past bar 11 now points outside the asset and
-    # ``AssetManifest`` refuses to load it. Drop the ones that no longer land inside the track.
+    # Overriding the tempo re-scales every bar number, because ``analyse`` counted bars at the
+    # measured rate. A track read at 175.8 is counted as 23 bars; the same 32 s of audio stored at
+    # the specified 88 is 11. Dropping the out-of-range markers is not enough -- on a short track
+    # the only section *is* the whole track, and discarding it leaves nothing to enter at, which
+    # is how 55 assets ended up unplayable. Rescale, then clamp to the stored length.
     if outcome.manifest.beat_grid:
         outcome.manifest.beat_grid.bpm = spec.bpm
-    total_bars = int(outcome.manifest.audio.duration_s / (240.0 / spec.bpm))
-    outcome.manifest.sections = [
-        s for s in outcome.manifest.sections if s.end_bar < total_bars
-    ]
-    outcome.manifest.loops = [loop for loop in outcome.manifest.loops if loop.end_bar < total_bars]
+    if measured > 0:
+        _rescale_bars(outcome.manifest, spec.bpm / measured)
     if not outcome.admitted:
         flags = ", ".join(outcome.quality.flags) or "unknown"
         return False, f"gates failed: {flags}"
@@ -330,6 +328,34 @@ def admit(
     )
     octave_note = "" if detected_level is None else f" (detected at {detected_level})"
     return True, f"measured={measured:.1f} err={errors[best]:.2f}%{octave_note}"
+
+
+def _rescale_bars(manifest: AssetManifest, scale: float) -> None:
+    """Convert bar numbers counted at one tempo into bars at another.
+
+    ``scale`` is ``specified_bpm / measured_bpm``. Markers past the stored length are **clamped,
+    not removed**: a section spanning the whole track stays a section spanning the whole track,
+    and ``FeasibilityFilter`` refuses an asset with no section or loop to enter at. Discarding
+    the out-of-range marker instead is what left 55 assets unplayable.
+    """
+    total_bars = int(manifest.audio.duration_s / (240.0 / manifest.beat_grid.bpm))
+    if total_bars < 1 or scale <= 0:
+        return
+    last = total_bars - 1
+
+    def convert(value: int) -> int:
+        return max(0, min(round(value * scale), last))
+
+    manifest.sections = [
+        s.model_copy(update={"start_bar": convert(s.start_bar), "end_bar": convert(s.end_bar)})
+        for s in manifest.sections
+    ]
+    manifest.loops = [
+        loop.model_copy(
+            update={"start_bar": convert(loop.start_bar), "end_bar": convert(loop.end_bar)}
+        )
+        for loop in manifest.loops
+    ]
 
 
 def main() -> int:

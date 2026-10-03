@@ -52,8 +52,12 @@ family-level split with nothing sensible to separate.
 
 | Library | Distinct decision situations | Usable for a fine-tune |
 |---|---|---|
-| 10 (current) | ~30–40 | no — overfits |
-| **~100** | **~300+** | **yes** |
+| 10 (baseline) | ~30–40 | no — overfits |
+| **127 (measured)** | **5,112 transitionable pairs** | **yes** |
+
+Measured with `FeasibilityFilter` at `max_tempo_ratio` 1.10: every one of the 127 assets has a
+menu of 12+ options, giving **116,353 pairwise comparisons**. That is far past the 300–400 labels
+Stage 2 needs, so the library is no longer the binding constraint.
 
 100 tracks costs **~22 minutes** of GPU at the measured 13 s per 45 s of audio. It is the cheapest
 thing standing between us and a meaningful label round, and it needs no listening.
@@ -62,9 +66,24 @@ thing standing between us and a meaningful label round, and it needs no listenin
 
 ## 3. Stages
 
-### Stage 1 — depot growth and pipeline proof *(no listening required)*
+### Stage 1 — depot growth and pipeline proof *(DONE, no listening required)*
 
-1. Generate ~100 YuE2 tracks clustered across tempo and mood, mastered, gated, admitted.
+**Result: 117 Strudel tracks admitted through the full gate path, plus the 10 YuE2 renders, all
+127 playable.** Built by `tools/build_strudel_depot.py`; 8 of 125 rejected, all because the beat
+tracker landed on a metrical level no multiplier could reconcile (e.g. 174 BPM reading as 152).
+
+What the build established, none of which was known beforehand:
+
+* **Measured tempo lands on the wrong metrical level**, not merely on an imprecise one. A bass note
+  on every eighth note reads as double-time; a 168 BPM bed reads as 112.5 under compound meter.
+  The gate therefore tests the whole family of musically-related rates. It is a *verification*
+  gate — it catches silence, clipping and the wrong file — not a precision one.
+* Overriding the tempo **re-scales every bar number**, because analysis counts bars at the
+  measured rate. Dropping the resulting out-of-range markers left 55 assets with no section to
+  enter at; converting and clamping them is what made the depot usable.
+* The renderer must not run under `ulimit -v`. Chromium reserves tens of GB of address space for
+  its V8 sandbox while holding little resident memory, so a 4 GB cap makes it hang rather than
+  fail. Render cost is 0.6–1.7 s per track, so the depot is minutes, not an evening.
 2. Derive rule-based labels over every valid pair → `rule_derived`, thousands of rows.
 3. Run the full RLCD loop on them. This proves: tokenisation, family-level splits, the calibration
    slice held out before training, loss behaviour at scale, and that the trained adapter loads.
