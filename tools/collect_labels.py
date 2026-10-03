@@ -78,6 +78,14 @@ def load_library() -> dict[str, object]:
     return manifests
 
 
+def _session_id(index: int, theme: str) -> str:
+    """Stable id for a decision point, including a digest of the request that shaped it."""
+    import hashlib
+
+    digest = hashlib.sha256(theme.encode("utf-8")).hexdigest()[:8]
+    return f"collect-{index}-{digest}"
+
+
 def build_decision(
     manifests: dict[str, object], *, index: int, theme: str
 ) -> tuple[DecisionContext, list, object] | None:
@@ -90,7 +98,11 @@ def build_decision(
     from vexa_contracts import SessionState
 
     state = SessionState(
-        session_id=f"collect-{index}",
+        # The theme is part of the session id. Five annotators must see the *same* request for
+        # their answers to be comparable, and without this a divergent --theme produced two
+        # annotations with an identical session_id and family_id but different request text --
+        # silently corrupting the agreement measurement the whole exercise exists to produce.
+        session_id=_session_id(index, theme),
         theme=theme,
         clock=__import__("vexa_contracts").MusicalClock(
             bpm=manifests[current_id].beat_grid.bpm if manifests[current_id].beat_grid else 120.0
@@ -106,7 +118,12 @@ def build_decision(
 
     candidates = [
         CandidateType(
-            id="continue",
+            # The canonical safe-action id, not a local alias. ``FeasibilityFilter`` emits
+            # ``continue_current``, the adapter recognises only that spelling, and shadow mode
+            # logs it. Renaming it here made every "hold" label unjoinable to a shadow
+            # observation -- and holding is exactly the choice Laya gets wrong, so the cases
+            # that matter most would have been the ones dropped.
+            id="continue_current",
             type="continue",
             energy=manifests[current_id].energy(),
             vocals=False,
@@ -147,6 +164,11 @@ def main() -> int:
     parser.add_argument("--annotator", required=True, help="who is listening")
     parser.add_argument("--count", type=int, default=10, help="decision points to collect")
     parser.add_argument("--theme", default="a warm, unhurried set that keeps building")
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="where to append labels. Defaults to data/sessions/labels.jsonl. Give each "
+             "annotator their own file; agreement is measured across files, not within one.",
+    )
     parser.add_argument("--audible", action="store_true",
                         help="actually play the previews. Off by default.")
     args = parser.parse_args()
@@ -158,8 +180,24 @@ def main() -> int:
         print("\nneed at least two schedulable assets to compare a transition", file=sys.stderr)
         return 1
 
+    global OUT
+    if args.out:
+        OUT = args.out
     existing = list(read_jsonl(OUT)) if OUT.exists() else []
     print(f"existing labels: {len(existing)}")
+    if existing:
+        sessions = {a.session_id for a in existing}
+        if args.theme and not any(s.startswith("collect-0-") or "-" in s for s in sessions):
+            pass
+        this_theme = _session_id(0, args.theme).rsplit("-", 1)[-1]
+        foreign = {s.rsplit("-", 1)[-1] for s in sessions if "-" in s} - {this_theme}
+        if foreign:
+            print(
+                f"\n  WARNING: labels already exist for a different request theme "
+                f"({sorted(foreign)}).\n  Annotators only produce comparable agreement on the "
+                f"same theme.\n  Either keep --theme as-is, or point --out at a fresh file.",
+                file=sys.stderr,
+            )
 
     renderer = PreviewRenderer(sample_rate=44100, out_dir=ROOT / "var" / "previews")
     collected: list[Annotation] = []
@@ -230,7 +268,7 @@ def main() -> int:
             also_acceptable=others,
             rejected_action_ids=rejected,
             family_id=current.asset_id,
-            session_id=f"collect-{index}",
+            session_id=_session_id(index, args.theme),
             label_source=LabelSource(
                 kind="human_pairwise_review",
                 annotators=[args.annotator],
@@ -243,7 +281,7 @@ def main() -> int:
 
     if collected:
         write_jsonl(OUT, [*existing, *collected])
-        print(f"\nwrote {len(collected)} new labels to {OUT.relative_to(ROOT)}")
+        print(f"\nwrote {len(collected)} new labels to {OUT}")
         print(f"total now: {len(existing) + len(collected)}")
         print("\nnext: split by family, convert, fine-tune")
     else:

@@ -298,3 +298,74 @@ def test_shadow_and_labels_join_on_the_option_set() -> None:
     other_menu = decision_key("house-a", {"continue_current", "transition_to_a"})
     assert shadow_side != other_deck, "a different deck is a different decision"
     assert shadow_side != other_menu, "a different menu is a different decision"
+
+
+def test_hold_action_uses_the_canonical_id() -> None:
+    """Every tool must spell the safe action the same way, or the join silently drops holds.
+
+    ``FeasibilityFilter`` emits ``continue_current`` and the adapter recognises only that spelling,
+    but the label collector used to rename it to ``continue``. Holding is exactly the choice Laya
+    gets wrong -- it picked it 12 times out of 12 -- so the mislabelled ids would have discarded
+    precisely the disagreements worth judging.
+    """
+    from vexa_laya.adapter import SAFE_IDS
+
+    assert "continue_current" in SAFE_IDS
+    from collect_labels import build_decision
+
+    manifests = {f"a{i}": _asset(i) for i in range(6)}
+    built = build_decision(manifests, index=0, theme="t")
+    if built is None:
+        return  # filter produced nothing playable; nothing to assert about the menu
+    context = built[0]
+    ids = [c.id for c in context.candidates]
+    assert "continue_current" in ids
+    assert "continue" not in ids, "the bare alias must not reappear"
+
+
+def test_annotators_on_the_same_theme_share_a_session_id() -> None:
+    """Agreement is only measurable if every annotator saw an identical request.
+
+    Five annotators must land on the same decision points or their answers cannot be compared.
+    Binding the theme into the session id makes a divergent ``--theme`` a visible mismatch rather
+    than two rows that look like the same decision.
+    """
+    from collect_labels import _session_id
+
+    theme = "a warm, unhurried set that keeps building"
+    assert _session_id(0, theme) == _session_id(0, theme)
+    assert _session_id(0, theme) != _session_id(1, theme)
+    assert _session_id(0, theme) != _session_id(0, "a different direction")
+
+
+def _asset(index: int):
+    """A minimal admissible asset for filter-level tests."""
+    from vexa_contracts import (
+        ApprovalState,
+        AssetManifest,
+        AudioProperties,
+        BeatGrid,
+        Estimate,
+        QualityReport,
+        ReadinessState,
+        SourceType,
+    )
+
+    return AssetManifest(
+        asset_id=f"a{index}",
+        family_id=f"family_a{index}",
+        source_type=SourceType.PACK_IMPORT,
+        content_sha256="a" * 64,
+        audio=AudioProperties(
+            codec="wav", sample_rate_hz=48000, channels=2, duration_s=32.0,
+            integrated_lufs=-14.0, true_peak_dbtp=-1.5,
+        ),
+        beat_grid=BeatGrid(bpm=122.0 + index, grid_version=1, confidence=1.0),
+        tags={"energy": [Estimate(value="0.50", confidence=1.0)]},
+        approval=ApprovalState.APPROVED,
+        quality=QualityReport(
+            decode_ok=True, duration_ok=True, loudness_ok=True, beat_grid_ok=True,
+            loop_boundary_ok=True, audio_quality_ok=True,
+        ),
+        readiness=ReadinessState.READY,
+    )
