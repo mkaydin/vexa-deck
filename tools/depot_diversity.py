@@ -160,11 +160,11 @@ def main() -> int:
     ]
     if distances:
         histogram = np.histogram(distances, bins=10)
-        print("--- pairwise timbre distance, standardised (sanity-check the threshold against these) ---")
+        print("--- pairwise timbre distance, standardised "
+              "(sanity-check the threshold against these) ---")
+        peak = max(1, int(histogram[0].max()))
         for lo, count in zip(histogram[1][:-1], histogram[0], strict=True):
-            bar = "#" * int(count / max(1, histogram[0].max()) * 40)
-            span = float(np.subtract(*np.histogram(distances, bins=11)[1][1:3]))
-            print(f"  {lo:6.2f}  {count:5d}  {bar}")
+            print(f"  {lo:6.2f}  {count:5d}  {'#' * int(count / peak * 40)}")
         print(f"\n  threshold {args.distance} sits in the dense region; "
               f"{sum(1 for d in distances if d < args.distance)} pairs fall below it\n")
 

@@ -1,0 +1,103 @@
+{
+  "source": "rule",
+  "model": "",
+  "note": "LLM-written briefs. Nobody has listened to these, so they may fill the depot but must never be treated as labelled preference.",
+  "briefs": [
+    {
+      "name": "brief-calm-e0_1-v0",
+      "style": "instrumental ambient, long pads, no percussion, weightless",
+      "energy": 0.1,
+      "mood": "calm",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-dark-e0_25-v0",
+      "style": "instrumental dub techno, chords with tape delay, sparse kick, cavernous",
+      "energy": 0.25,
+      "mood": "dark",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-calm-e0_15-v0",
+      "style": "instrumental deep listening, granular textures, bowed metal, still",
+      "energy": 0.15,
+      "mood": "calm",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-bright-e0_7-v0",
+      "style": "instrumental highlife, interlocking guitars, bright percussion, joyful",
+      "energy": 0.7,
+      "mood": "bright",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-dark-e0_75-v0",
+      "style": "instrumental gqom, polyrhythmic drums, call and response, insistent",
+      "energy": 0.75,
+      "mood": "dark",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-driving-e0_8-v0",
+      "style": "instrumental footwork, clipped percussion, rolling bassline, nervous",
+      "energy": 0.8,
+      "mood": "driving",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-dark-e0_2-v0",
+      "style": "instrumental drone, single sustained tone, bowed strings, hypnotic",
+      "energy": 0.2,
+      "mood": "dark",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-warm-e0_35-v0",
+      "style": "instrumental bossa nova, nylon guitar, brushed kit, relaxed",
+      "energy": 0.35,
+      "mood": "warm",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-dark-e0_4-v0",
+      "style": "instrumental trip-hop, vinyl texture, muted beat, smoky",
+      "energy": 0.4,
+      "mood": "dark",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-warm-e0_3-v0",
+      "style": "instrumental library music, tape wobble, sparse piano, nostalgic",
+      "energy": 0.3,
+      "mood": "warm",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-driving-e0_65-v0",
+      "style": "instrumental garage, bleepy percussion, shuffling hats, loose",
+      "energy": 0.65,
+      "mood": "driving",
+      "origin": "rule",
+      "model": ""
+    },
+    {
+      "name": "brief-driving-e0_6-v0",
+      "style": "instrumental breaks, syncopated break, jazzy keys, restless",
+      "energy": 0.6,
+      "mood": "driving",
+      "origin": "rule",
+      "model": ""
+    }
+  ]
+}

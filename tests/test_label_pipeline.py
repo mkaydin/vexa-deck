@@ -179,3 +179,50 @@ def test_yue2_depot_prompts_stay_instrumental() -> None:
 
     for brief in build_briefs(200):
         assert "no vocals" in brief.style.lower()
+
+def test_prompt_generator_falls_back_when_no_endpoint_is_configured() -> None:
+    """Generation must never depend on a network service being up.
+
+    ``README.md`` makes the planner optional, and a depot build is a long offline job. A missing or
+    unreachable endpoint has to degrade to the rule layout, not stop the run.
+    """
+    from generate_prompts import rule_briefs
+
+    briefs = rule_briefs(20)
+    assert len(briefs) == 20
+    assert all(b.origin == "rule" for b in briefs)
+    assert all("no vocals" in b.style.lower() for b in briefs)
+
+
+def test_prompt_parser_handles_fenced_and_prose_wrapped_replies() -> None:
+    """Models wrap JSON in fences and add prose despite being told not to.
+
+    The array has to be located rather than assumed, and an unparseable reply has to raise so the
+    caller falls back -- never silently produce a half-parsed batch.
+    """
+    import pytest
+    from generate_prompts import _parse
+
+    fenced = (
+        'Here you go:\n```json\n["instrumental acid jazz, Rhodes chords, loose",\n'
+        ' "instrumental tribal percussion, hand drums, raw"]\n```'
+    )
+    briefs = _parse(fenced, model="stub")
+    assert len(briefs) == 2
+    assert all(b.origin == "llm" and b.model == "stub" for b in briefs)
+    assert all("no vocals" in b.style.lower() for b in briefs)
+
+    with pytest.raises(ValueError):
+        _parse("I am afraid I cannot help with that.", model="stub")
+    with pytest.raises(ValueError):
+        _parse("[]", model="stub")
+
+
+def test_llm_briefs_are_deduplicated_by_style() -> None:
+    """A model asked for N prompts returns duplicates; N renders of one prompt is a waste."""
+    from generate_prompts import rule_briefs
+
+    unique: dict[str, object] = {}
+    for brief in rule_briefs(24):
+        unique.setdefault(brief.style.lower(), brief)
+    assert len(unique) == 12, "the fallback layout cycles 12 distinct styles"
