@@ -176,7 +176,7 @@ def main() -> int:
         print(f"\nABORT: model chose an action outside the feasible menu: {failures[:5]}")
         return 1
 
-    print(f"\nobservations written to {args.out.relative_to(ROOT)}")
+    print(f"\nobservations written to {args.out}")
     print("next: LISTEN to the cases where Laya and the rules differ. An agreement rate")
     print("      means nothing until you have heard the disagreements and judged them.")
     return 0
