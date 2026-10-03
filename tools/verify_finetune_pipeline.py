@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -101,10 +102,40 @@ def synthetic_rows(count: int) -> list[dict]:
     return rows
 
 
+def load_annotation_rows(path: Path) -> list[dict]:
+    """Rows built from the real depot, converted to the shape the notebook's loader expects.
+
+    This is the Stage 1 proof ``FINETUNE-DECISION.md`` asks for: the loop has to survive real asset
+    ids, real menu sizes and real family structure, not just the twelve synthetic families.
+    """
+    from vexa_laya.convert import to_training_items
+    from vexa_laya.dataset import Annotation
+
+    annotations = [
+        Annotation.model_validate_json(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not annotations:
+        raise SystemExit(f"no annotations in {path}")
+    kinds = {a.label_source.kind for a in annotations}
+    if kinds != {"rule_derived"}:
+        print(f"  NOTE: mixed label sources {sorted(kinds)}")
+    return to_training_items(annotations)
+
+
 def main() -> int:
     import torch
     device = resolve_device(DEVICE_NAME)
     print(f"device: {device} ({torch.cuda.get_device_name(device)})")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--from-annotations", type=Path, default=None,
+        help="JSONL of Annotation rows (e.g. data/labels/rule_derived.jsonl) "
+             "instead of the synthetic ones",
+    )
+    args = parser.parse_args()
+
     cfg = TrainConfig(epochs=2, micro_batch_size=4, gradient_accumulation_steps=2, seed=0)
 
     print("\nloading base checkpoint via laya.load ...")
@@ -122,7 +153,10 @@ def main() -> int:
         print("  ABORT: weights look randomly initialised", file=sys.stderr)
         return 1
 
-    rows = synthetic_rows(48)
+    if args.from_annotations:
+        rows = load_annotation_rows(args.from_annotations)
+    else:
+        rows = synthetic_rows(48)
     items: list[TrainingItem] = []
     skipped = 0
     for row in rows:

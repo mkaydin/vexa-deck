@@ -22,6 +22,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "services/laya/src"))
 
 from build_strudel_depot import (  # noqa: E402
     DEFAULT_TOLERANCE_PCT,
@@ -173,3 +174,47 @@ def test_specs_carry_the_tags_the_filters_match_on() -> None:
     for spec in build_specs(125):
         assert f"{spec.energy:.2f}" in tags["energy"], f"{spec.name} energy not a known band"
         assert spec.mood in moods
+
+
+def test_rule_derived_rows_can_never_be_promoted() -> None:
+    """The exclusion must be a property of the data, not a convention.
+
+    ``IDEAS.md:57``: training on synthetic rules can reproduce the rules without improving
+    listening quality. If a promotion step forgets to filter, the result looks like a successful
+    fine-tune and adds nothing at runtime -- the worst outcome available, because it is invisible.
+    """
+    from rule_derived_labels import LabelSource, promotable
+    from vexa_laya.dataset import Annotation, DecisionContext, StateSnapshot
+
+    def row(kind: str) -> Annotation:
+        return Annotation(
+            state=DecisionContext(
+                request="r",
+                current=StateSnapshot(bpm=122.0, bars_to_boundary=8, energy=0.5),
+                candidates=[{"id": "a", "type": "transition", "bpm": 122.0},
+                            {"id": "b", "type": "transition", "bpm": 124.0}],
+            ),
+            preferred_action_id="a",
+            family_id="family_x",
+            session_id="s",
+            label_source=LabelSource(kind=kind),
+        )
+
+    assert promotable([row("rule_derived")]) == []
+    assert len(promotable([row("human_pairwise_review")])) == 1
+    assert len(promotable([row("teacher_model")])) == 1
+
+
+def test_generated_rows_are_all_rule_derived_and_well_formed() -> None:
+    """Whatever the generator produces must carry its provenance and a real menu."""
+    from rule_derived_labels import build_rows, load_library
+
+    library = load_library()
+    if not library:
+        return  # no depot built; nothing to assert about
+    rows = build_rows(library, per_asset=2)
+    assert rows
+    assert all(r.label_source.kind == "rule_derived" for r in rows)
+    assert all(len(r.state.candidates) >= 2 for r in rows)
+    # Families must be real asset families, or family-level splits have nothing to separate.
+    assert len({r.family_id for r in rows}) == len(library)

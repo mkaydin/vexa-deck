@@ -88,10 +88,20 @@ What the build established, none of which was known beforehand:
 3. Run the full RLCD loop on them. This proves: tokenisation, family-level splits, the calibration
    slice held out before training, loss behaviour at scale, and that the trained adapter loads.
 
-**Exit criterion:** loss falls, splits hold no family overlap, an adapter round-trips through
-`laya.load`, and every produced row is stamped non-promotable.
+**Result: DONE.** `tools/rule_derived_labels.py` builds **508 rows over 127 families** from the
+real filter's own menus — real asset ids, real menu sizes, real family structure. Verified:
 
-**This stage can ship nothing, and that is correct.**
+```
+tokenised 508 items, skipped 0 (marker/option mismatch)
+loss 0.7255 -> 0.6192   peak VRAM 8.03 GiB of 15.5   50 s total
+promotable=0            <- rule-derived rows can never ship
+```
+
+Zero skips is the load-bearing number: the loop survives real data, not just the twelve synthetic
+families. `promotable()` is the single place that knows which sources may ship, so the exclusion is
+a property of the data rather than a convention someone has to remember.
+
+**This stage shipped nothing, and that is correct.**
 
 ### Stage 2 — human labels *(the real work)*
 
