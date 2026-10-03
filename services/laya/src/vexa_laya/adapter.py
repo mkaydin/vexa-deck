@@ -126,6 +126,11 @@ class LayaAdapter:
         self._agent: Any = None
 
     @property
+    def name(self) -> str:
+        """Satisfies ``DecisionPolicy`` -- ``ShadowPolicy`` reads it to label its observations."""
+        return f"laya:{self.settings.checkpoint}"
+
+    @property
     def loaded(self) -> bool:
         return self._agent is not None
 

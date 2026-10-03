@@ -123,7 +123,31 @@ to be dropped and the one that matters most the moment anything gates on confide
 
 ### Stage 4 — shadow mode
 
-Laya proposes, rules play, disagreements logged. Promotion requires all of:
+Laya proposes, rules play, disagreements logged.
+
+**Built and run.** `tools/shadow_compare.py` drives `ShadowPolicy` across real decision points
+drawn from the real filter menus.
+
+The first run is the finding, and it is unambiguous:
+
+```
+library: 127 assets, 12 decision points, 7.0s
+  agreement with rules  : 0/12 (0.0%)
+  distinct model choices: 1
+  mean model confidence  : 0.348  (NOT a gate until calibrated)
+  invalid actions        : 0      <- must be 0
+  rules controlled audio : all 12 decisions
+```
+
+**The model chose `continue_current` in 12 of 12.** It never once picked a transition.
+
+That is option 0 in every menu, and it is what a near-chance model does on a domain it has never
+seen — consistent with the base checkpoint's 0.362 against a 0.318 floor on typed decisions. It is
+also exactly the failure shadow mode exists to catch: **live, this model would never have changed
+track.** The rules controlled all 12 decisions and the invalid-action count was 0, so the safety
+properties held exactly as designed.
+
+Promotion requires all of:
 
 | Gate | Condition |
 |---|---|

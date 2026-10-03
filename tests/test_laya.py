@@ -336,3 +336,25 @@ def test_missing_checkpoint_reports_unavailable(monkeypatch):
     response = adapter.choose(decision_request())
     assert response.fell_back
     assert "unavailable" in response.reasoning
+
+def test_laya_adapter_satisfies_the_decision_policy_protocol() -> None:
+    """``ShadowPolicy`` reads ``inner.name`` to label its observations; the adapter had no name.
+
+    The failure was a hard ``AttributeError`` on the first shadow decision, not a degraded
+    observation -- so shadow mode had never actually run against a real model.
+    """
+    from vexa_laya.adapter import LayaAdapter
+
+    adapter = LayaAdapter()
+    assert isinstance(adapter.name, str)
+    assert adapter.name
+    assert "laya" in adapter.name
+    # Name must not require a loaded checkpoint: ShadowPolicy reads it while constructing records.
+    assert not adapter.loaded
+
+
+def test_laya_adapter_name_is_stable_across_reads() -> None:
+    from vexa_laya.adapter import LayaAdapter
+
+    adapter = LayaAdapter()
+    assert adapter.name == adapter.name
