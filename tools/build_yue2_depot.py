@@ -214,6 +214,43 @@ def admit(brief: DepotBrief, wav: Path, *, approve: bool) -> tuple[bool, str]:
     return True, f"{outcome.manifest.beat_grid.bpm:.1f} BPM  key={key}"
 
 
+def approve_existing(directory: Path) -> int:
+    """Mark already-written, gate-passing manifests approved.
+
+    Needed because ``admit`` records approval at write time, so a run that did not pass
+    ``--approve`` leaves every track pending and ``FeasibilityFilter`` refuses to schedule any of
+    them -- an entire generation run that exists but cannot be played. Only manifests already in the
+    library are touched, which means each one has passed every gate; this records that fact rather
+    than bypassing it. Each is re-validated before and after so a bad edit cannot slip through.
+    """
+    from vexa_contracts import ApprovalState, ReadinessState
+
+    approved = 0
+    for path in sorted(directory.glob("*.json")):
+        if ".request." in path.name:
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("approval") == ApprovalState.APPROVED.value:
+            continue
+        AssetManifest.model_validate(data)  # must load before we touch it
+        quality = data["quality"]
+        if not all(
+            quality[flag]
+            for flag in (
+                "decode_ok", "duration_ok", "loudness_ok",
+                "beat_grid_ok", "loop_boundary_ok", "audio_quality_ok",
+            )
+        ):
+            print(f"  skipped {path.name}: gates did not pass", file=sys.stderr)
+            continue
+        data["approval"] = ApprovalState.APPROVED.value
+        data["readiness"] = ReadinessState.READY.value
+        AssetManifest.model_validate(data)  # and still load afterwards
+        path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        approved += 1
+    return approved
+
+
 def _write_manifest(manifest: AssetManifest, directory: Path) -> None:
     (directory / f"{manifest.asset_id}.json").write_text(
         json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8"
@@ -233,10 +270,19 @@ def main() -> int:
              "how the first depot run produced 200 tracks none of which could be played.",
     )
     parser.add_argument(
+        "--approve-existing", action="store_true",
+        help="approve manifests already written by an earlier run and exit",
+    )
+    parser.add_argument(
         "--resume", action="store_true",
         help="skip briefs that already have a manifest (a full run is ~45 min)",
     )
     args = parser.parse_args()
+
+    if args.approve_existing:
+        count = approve_existing(args.out)
+        print(f"approved {count} existing manifest(s) in {args.out}")
+        return 0
 
     if not BINARY.exists():
         print(f"backend missing: {BINARY}", file=sys.stderr)
