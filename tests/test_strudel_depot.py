@@ -218,3 +218,62 @@ def test_generated_rows_are_all_rule_derived_and_well_formed() -> None:
     assert all(len(r.state.candidates) >= 2 for r in rows)
     # Families must be real asset families, or family-level splits have nothing to separate.
     assert len({r.family_id for r in rows}) == len(library)
+
+
+def test_finetune_gate_refuses_non_human_labels() -> None:
+    """The gate must refuse, not warn.
+
+    A checkpoint trained on rule-derived labels scores well on our own benchmark and changes
+    nothing at runtime. Nothing in a training log would reveal that, so the refusal has to happen
+    before any GPU time is spent.
+    """
+    import pytest
+    from finetune_human import refuse_unless_human
+    from vexa_laya.dataset import Annotation, DecisionContext, LabelSource, StateSnapshot
+
+    def row(kind: str) -> Annotation:
+        return Annotation(
+            state=DecisionContext(
+                request="r",
+                current=StateSnapshot(bpm=122.0, bars_to_boundary=8, energy=0.5),
+                candidates=[{"id": "a", "type": "transition"},
+                            {"id": "b", "type": "transition"}],
+            ),
+            preferred_action_id="a",
+            family_id="f",
+            session_id="s",
+            label_source=LabelSource(kind=kind),
+        )
+
+    refuse_unless_human([row("human_pairwise_review")])  # must not raise
+    for kind in ("rule_derived", "teacher_model", "synthetic"):
+        with pytest.raises(SystemExit):
+            refuse_unless_human([row(kind)])
+
+
+def test_calibration_slice_must_be_carved_from_the_training_split() -> None:
+    """``calibration_slice`` is not split-aware; carving it from the whole dataset leaks.
+
+    It sorts what it is given by family and takes the first N, so calling it on all annotations
+    returns rows that straddle train and validation. Fitting temperatures on data the run trained
+    on measures the fit rather than the calibration (``LAYA_DATA.md:65``).
+    """
+    from rule_derived_labels import load_library
+    from vexa_laya.convert import calibration_slice
+    from vexa_laya.dataset import split_by_family
+
+    library = load_library()
+    if not library:
+        return
+    from rule_derived_labels import build_rows
+
+    rows = build_rows(library, per_asset=2)
+    split = split_by_family(rows)
+
+    naive = {a.family_id for a in calibration_slice(rows, max_items=400)}
+    held_out = {a.family_id for a in split.validation} | {a.family_id for a in split.test}
+
+    carved_from_train = {a.family_id for a in calibration_slice(split.train, max_items=400)}
+    assert not (carved_from_train & held_out), "carving from train must be disjoint by construction"
+    # The naive call is allowed to overlap; that is precisely why it must not be used.
+    assert naive is not None
