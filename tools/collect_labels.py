@@ -205,8 +205,17 @@ def main() -> int:
         except EOFError:
             print("\nno input available; stopping")
             break
-        if not picked or picked not in previews:
+        if not picked:
             print("     skipped")
+            failed += 1
+            continue
+        # Accept either the printed index or the full label. Typing a 30-character asset id
+        # several hundred times per annotator is a good way to get bad labels out of hurry, so the
+        # index is the obvious thing to try first and the label stays as a fallback.
+        if picked.isdigit() and 0 <= int(picked) < len(previews):
+            picked = list(previews)[int(picked)]
+        if picked not in previews:
+            print(f"     '{picked}' is not one of the options; skipped")
             failed += 1
             continue
 
