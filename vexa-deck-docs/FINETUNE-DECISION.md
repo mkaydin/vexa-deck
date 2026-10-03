@@ -68,22 +68,22 @@ thing standing between us and a meaningful label round, and it needs no listenin
 
 ### Stage 1 — depot growth and pipeline proof *(DONE, no listening required)*
 
-**Result: 117 Strudel tracks admitted through the full gate path, plus the 10 YuE2 renders, all
-127 playable.** Built by `tools/build_strudel_depot.py`; 8 of 125 rejected, all because the beat
-tracker landed on a metrical level no multiplier could reconcile (e.g. 174 BPM reading as 152).
+**First attempt: withdrawn.** 117 Strudel tracks were admitted and measured, then removed after
+listening showed they were wrong for this project's sound. See *Rejected: algorithmic generation
+as depot filler* below for what that cost and what survived.
+
+**Second attempt: YuE2 only, by volume.** `tools/build_yue2_depot.py` renders 200 briefs across 12
+tempo palettes x 7 moods x 5 energy bands, at a measured 17 s each (~57 min).
 
 What the build established, none of which was known beforehand:
 
-* **Measured tempo lands on the wrong metrical level**, not merely on an imprecise one. A bass note
-  on every eighth note reads as double-time; a 168 BPM bed reads as 112.5 under compound meter.
-  The gate therefore tests the whole family of musically-related rates. It is a *verification*
-  gate — it catches silence, clipping and the wrong file — not a precision one.
-* Overriding the tempo **re-scales every bar number**, because analysis counts bars at the
-  measured rate. Dropping the resulting out-of-range markers left 55 assets with no section to
-  enter at; converting and clamping them is what made the depot usable.
-* The renderer must not run under `ulimit -v`. Chromium reserves tens of GB of address space for
-  its V8 sandbox while holding little resident memory, so a 4 GB cap makes it hang rather than
-  fail. Render cost is 0.6–1.7 s per track, so the depot is minutes, not an evening.
+Those findings came out of the Strudel build and are about the analysis pipeline, not about
+Strudel, so they carry over. The Strudel *material* does not.
+
+**Open item:** YuE2 cannot be told a tempo. Ten renders scattered across 97–170 BPM, and at
+`max_tempo_ratio` 1.10 only the 117–134 band had partners. Scale is the only available lever:
+over a factor-of-two tempo range each transitionable band holds roughly 1/7 of the library, so
+every track's number of partners grows linearly with N.
 2. Derive rule-based labels over every valid pair → `rule_derived`, thousands of rows.
 3. Run the full RLCD loop on them. This proves: tokenisation, family-level splits, the calibration
    slice held out before training, loss behaviour at scale, and that the trained adapter loads.
@@ -186,90 +186,35 @@ That solves two problems YuE2 cannot:
    i.e. overlapping estimates rather than a partition). Algorithmic generation *specifies* the
    parts, so separation is never needed.
 
-### The domain shift, stated plainly
+### Rejected: algorithmic generation as depot filler
 
-A selector trained on algorithmic transitions and deployed on YuE2 transitions is a **domain
-shift**. The `DecisionRequest` state is bpm, key, section, bars_to_boundary, energy, vocals,
-recent_families — no timbre — so the *task* is the same. But the mapping from features to "sounds
-good" may differ between synthesised loops and dense generative audio.
+**Tried and removed.** A Strudel depot of 125 programmatic tracks was built, gated and committed
+to. It was a technical success and a product failure. Listening to it: the loops are audibly wrong
+for this project's sound, and only the YuE2 renders are usable.
 
-This is a real risk and shadow mode is precisely the mechanism for catching it. It does not
-invalidate the approach; it bounds the claim.
+The error was mine, and it was a framing error rather than a measurement error. I proposed
+"Strudel for the depot, YuE2 for the music" on the grounds that the depot only needed to be
+*large and well-measured*, since the `DecisionRequest` carries no timbre. That reasoning is wrong:
+**the depot is the training distribution.** A selector that learns what to prefer among
+drum-machine loops has learned the wrong preference, and no amount of feature-space compatibility
+rescues it. Count and metadata quality were optimised; the thing that actually mattered was
+whether the material sounded like the product.
 
-### Strudel — the strongest candidate
+What survives from the experiment, because it was real:
 
-**Strudel** (<https://strudel.cc>) is a JavaScript port of the TidalCycles pattern language,
-browser-first. It renders through WebAudio, so a headless renderer needs browser automation —
-but several exist, and the mature one works.
+* A beat tracker does not merely measure tempo imprecisely, it lands on the **wrong metrical
+  level** -- double-time when there is an onset on every eighth note, compound-meter ratios on
+  slower beds. Any gate comparing measured to expected tempo needs octave tolerance.
+* **Never cap a browser renderer with `ulimit -v`.** Chromium reserves tens of GB of address space
+  for its V8 sandbox while holding little resident memory, so a 4 GB cap makes it hang rather than
+  fail. Bound renderer work by process count and duration instead.
+* Bar numbers re-scale when tempo changes, so section markers must be converted, not filtered.
 
-Tested `dehenne/wirbel` (**AGPL-3.0-only**, npm, has CI):
-
-```
-setcpm(124/60/4)
-stack(
-  s("bd*4").gain(1.0),
-  s("~ cp").gain(.55),
-  s("~ ~ oh ~").gain(.3),
-  note("<C2 C2 F2 G2>*8").s("sawtooth").lpf(400).gain(.6)
-)
-```
-
-```
-$ wirbel house.strudel --format wav --duration 12 --json
-{"ok":true,"output":"/tmp/strudelout/house.wav","duration":12,"cps":0.00861}
-```
-
-**12 seconds of stereo audio in 0.52 s.** Two orders of magnitude faster than YuE2 (13 s per
-45 s), and it produced a genuine four-on-the-floor pattern with a filtered saw bass.
-
-Worth noting: `jebin2/strudel-render` advertises *"Pure renderer; loopability is config"* —
-directly relevant, since a DJ library wants loopable beds.
-
-I first measured **130.8 BPM against a requested 124, confidence 0.00**, and recorded beat
-detection as a blocker. **That was my error, not a defect.** The pattern used `setcpm`, which is
-cycles per *minute*; wirbel divided by 60 again, so the 12 s render contained **0.103 cycles —
-about 0.4 beats**. One detected onset was the correct answer to a near-silent clip. `setcps` is
-the right call.
-
-Re-tested across the range, with the corrected pattern:
-
-| Requested | Measured | Error | Confidence | Stable grid |
-|---|---|---|---|---|
-| 90 | 90.7 | 0.81 % | 1.00 | yes |
-| 105 | 104.2 | 0.79 % | 1.00 | yes |
-| 124 | 125.0 | 0.81 % | 1.00 | yes |
-| 140 | 140.6 | 0.45 % | 1.00 | yes |
-| 174 | 175.8 | 1.02 % | 1.00 | yes |
-
-**Beat detection works on synthetic material.** YuE2 library re-checked at the same time — no
-regression, all six tracks still at confidence 1.00.
-
-The real finding is narrower and more useful: **measured tempo carries ~1 % error**, from frame
-quantisation at `REFERENCE_RATE` 48 kHz with a 512-hop. So when the generator *specified* the
-tempo, we store the specified value and treat measurement as **verification, not metadata**.
-That distinction matters more for the depot than the bug did.
-
-One genuine issue remains: the render measured **-27.65 LUFS**, below our -24 floor. Our existing
-mastering stage fixes it.
-
-### Decision
-
-**Use Strudel to fill the depot and the Stage 1 pipeline test. Keep YuE2 as the production
-aesthetic.**
-
-Rationale: 0.5 s per render makes a 100-track depot nearly free, tempo is specified rather than
-estimated, and patterns are per-instrument so stems are genuine. YuE2 stays for the audible
-library because it sounds like music rather than a drum machine.
-
-Licence is the deciding factor against `isobar`: Strudel examples carry **CC BY-NC-SA 4.0** and
-wirbel is **AGPL-3.0-only**. Both are fine for this non-commercial project but neither is
-permissive, so patterns and rendered audio must be kept as separate artefacts, never vendored
-into the source tree.
-
-**Tempo handling:** store the generator's specified tempo; use the measured value as a gate
-(reject beyond ~2 % disagreement), never as the stored metadata.
+**Consequence:** the depot must come from YuE2. That costs ~17 s per 45 s render, and it means
+tempo cannot be *requested* -- only nudged and measured.
 
 ---
+
 
 ## 5. What is already true
 
