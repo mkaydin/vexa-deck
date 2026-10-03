@@ -194,14 +194,14 @@ def render(brief: DepotBrief, wav: Path, gpu: int, *, max_seq: int, steps: int) 
     return time.time() - started
 
 
-def admit(brief: DepotBrief, wav: Path) -> tuple[bool, str]:
+def admit(brief: DepotBrief, wav: Path, *, approve: bool) -> tuple[bool, str]:
     """Master, gate and write the manifest, exactly as the existing YuE2 library was built."""
     master(wav)
     outcome = analyse(
         wav,
         asset_id=brief.name,
         family_id=f"family_{brief.name}",
-        approval=ApprovalState.PENDING,
+        approval=ApprovalState.APPROVED if approve else ApprovalState.PENDING,
         provenance=Provenance(source_prompt=brief.style),
     )
     if outcome.fatal or outcome.manifest is None:
@@ -226,6 +226,12 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=ROOT / "assets" / "library")
     parser.add_argument("--max-seq", type=int, default=8192)
     parser.add_argument("--steps", type=int, default=32)
+    parser.add_argument(
+        "--approve", action="store_true",
+        help="mark admitted tracks approved. Without it every asset stays pending, and "
+             "FeasibilityFilter refuses to schedule anything that is not approved -- which is "
+             "how the first depot run produced 200 tracks none of which could be played.",
+    )
     parser.add_argument(
         "--resume", action="store_true",
         help="skip briefs that already have a manifest (a full run is ~45 min)",
@@ -255,7 +261,7 @@ def main() -> int:
             print(f"[{index}/{len(briefs)}] {brief.name} RENDER FAIL: {exc}", file=sys.stderr)
             rejected += 1
             continue
-        ok, detail = admit(brief, wav)
+        ok, detail = admit(brief, wav, approve=args.approve)
         if ok:
             admitted += 1
             print(f"[{index}/{len(briefs)}] {brief.name} {elapsed:.0f}s — {detail}", flush=True)
