@@ -277,3 +277,24 @@ def test_calibration_slice_must_be_carved_from_the_training_split() -> None:
     assert not (carved_from_train & held_out), "carving from train must be disjoint by construction"
     # The naive call is allowed to overlap; that is precisely why it must not be used.
     assert naive is not None
+
+
+def test_shadow_and_labels_join_on_the_option_set() -> None:
+    """A decision point's only stable identity is the deck plus the options offered.
+
+    The shadow log and the human labels come from different tools over different runs, so an
+    index or a position cannot join them. Joining on (playing asset, candidate id set) is what
+    makes the comparison possible at all.
+    """
+    from judge_shadow import decision_key
+
+    options = {"continue_current", "transition_to_a", "transition_to_b"}
+    shadow_side = decision_key("house-a", sorted(options))
+    label_side = decision_key("house-a", [c for c in options])
+
+    assert shadow_side == label_side, "order of the option set must not matter"
+
+    other_deck = decision_key("house-b", options)
+    other_menu = decision_key("house-a", {"continue_current", "transition_to_a"})
+    assert shadow_side != other_deck, "a different deck is a different decision"
+    assert shadow_side != other_menu, "a different menu is a different decision"

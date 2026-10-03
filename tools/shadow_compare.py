@@ -68,10 +68,17 @@ def load_library() -> list[AssetManifest]:
     return library
 
 
-def build_requests(library: list[AssetManifest], limit: int) -> list[DecisionRequest]:
-    """Real decision points: every asset as the deck, with the filter's own menu."""
+def build_requests(
+    library: list[AssetManifest], limit: int
+) -> list[tuple[DecisionRequest, AssetManifest]]:
+    """Real decision points: every asset as the deck, with the filter's own menu.
+
+    Returns the playing asset alongside each request. The observation log has to say what was on
+    the deck, because a human label recorded by ``tools/collect_labels.py`` over a different run
+    can only be joined to it by deck plus option set.
+    """
     flt = FeasibilityFilter(FilterConfig())
-    requests: list[DecisionRequest] = []
+    requests: list[tuple[DecisionRequest, AssetManifest]] = []
     for index, current in enumerate(library):
         if len(requests) >= limit:
             break
@@ -84,12 +91,12 @@ def build_requests(library: list[AssetManifest], limit: int) -> list[DecisionReq
         if len(result.candidates) < MIN_OPTIONS:
             continue
         requests.append(
-            DecisionRequest(
+            (DecisionRequest(
                 decision_id=f"shadow-{index:04d}-{current.asset_id}",
                 session_id="shadow",
                 state=SessionState(session_id="shadow", theme="shadow comparison"),
                 candidates=list(result.candidates),
-            )
+            ), current)
         )
     return requests
 
@@ -105,36 +112,36 @@ def main() -> int:
         print("no admitted assets", file=sys.stderr)
         return 2
 
-    requests = build_requests(library, args.limit)
-    print(f"library: {len(library)} assets, sampling {len(requests)} decision points")
-    if not requests:
+    pairs = build_requests(library, args.limit)
+    print(f"library: {len(library)} assets, sampling {len(pairs)} decision points")
+    if not pairs:
         print("no decision points had enough options to be worth asking about", file=sys.stderr)
         return 2
 
     rules = RulePolicy()
     rules.mark_loaded({m.asset_id for m in library})
-    model = LayaAdapter(LayaSettings())
-    shadow = ShadowPolicy(inner=model, rules=rules)
+    shadow = ShadowPolicy(inner=LayaAdapter(LayaSettings()), rules=rules)
 
     print("\nloading checkpoint (this takes a moment) ...")
     started = time.time()
     failures: list[str] = []
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    feasible_ids = {
-        request.decision_id: {c.action_id for c in request.candidates} for request in requests
-    }
     with args.out.open("w", encoding="utf-8") as handle:
-        for index, request in enumerate(requests, 1):
+        for index, (request, playing) in enumerate(pairs, 1):
+            feasible = {c.action_id for c in request.candidates}
             response = shadow.choose(request)
             observation = shadow.disagreements[-1]
-            valid = observation.chosen_action_id in feasible_ids[request.decision_id]
+            valid = observation.chosen_action_id in feasible
             record = {
                 "decision_id": request.decision_id,
-                "playing": request.state.decks.get("A").asset_id
-                if request.state.decks.get("A")
-                else None,
+                "playing": playing.asset_id,
+                "playing_bpm": round(playing.beat_grid.bpm, 3) if playing.beat_grid else None,
                 "options": len(request.candidates),
+                # The full menu, so this log can be joined against a human label recorded by a
+                # different tool over a different run. Two action ids cannot identify a decision
+                # point; the deck plus the option set can.
+                "candidate_ids": sorted(c.action_id for c in request.candidates),
                 "rule_action_id": observation.rule_action_id,
                 "model_action_id": observation.chosen_action_id,
                 "model_confidence": round(observation.confidence, 4),
@@ -146,8 +153,8 @@ def main() -> int:
             handle.write(json.dumps(record) + "\n")
             if not valid:
                 failures.append(request.decision_id)
-            if index % 10 == 0 or index == len(requests):
-                print(f"  {index}/{len(requests)} decisions")
+            if index % 10 == 0 or index == len(pairs):
+                print(f"  {index}/{len(pairs)} decisions")
 
     elapsed = time.time() - started
     agreements = sum(1 for d in shadow.disagreements if d.agrees)
@@ -155,15 +162,15 @@ def main() -> int:
     confidences = [d.confidence for d in shadow.disagreements]
     mean_conf = sum(confidences) / len(confidences) if confidences else 0.0
 
-    print(f"\n--- shadow report over {len(requests)} decisions in {elapsed:.1f}s ---")
-    print(f"  agreement with rules : {agreements}/{len(requests)} "
-          f"({agreements / len(requests):.1%})")
+    print(f"\n--- shadow report over {len(pairs)} decisions in {elapsed:.1f}s ---")
+    print(f"  agreement with rules : {agreements}/{len(pairs)} "
+          f"({agreements / len(pairs):.1%})")
     print(f"  distinct model choices: {len(choices)} "
           f"(always-one would mean agreement by accident)")
     print(f"  mean model confidence: {mean_conf:.3f}  "
           f"(NOT a gate until calibrated -- LAYA_DATA.md:65)")
     print(f"  invalid actions      : {len(failures)}  <- must be 0")
-    print(f"  rules controlled audio: all {len(requests)} decisions")
+    print(f"  rules controlled audio: all {len(pairs)} decisions")
 
     if failures:
         print(f"\nABORT: model chose an action outside the feasible menu: {failures[:5]}")
