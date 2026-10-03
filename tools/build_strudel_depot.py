@@ -44,7 +44,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "workers/yue2/src"))
-from vexa_contracts import ApprovalState, AssetManifest, Provenance, SourceType  # noqa: E402
+from vexa_contracts import (  # noqa: E402
+    ApprovalState,
+    AssetManifest,
+    Estimate,
+    Provenance,
+    SourceType,
+)
 from vexa_yue2.gates import analyse  # noqa: E402
 from vexa_yue2.master import master  # noqa: E402
 
@@ -310,6 +316,16 @@ def admit(
         flags = ", ".join(outcome.quality.flags) or "unknown"
         return False, f"gates failed: {flags}"
 
+    # The descriptive tags are what the retrieval filters match on, and they are *specified* here,
+    # not inferred -- confidence 1.0 because there is nothing to estimate. Omitting them leaves
+    # every energy and mood filter inert for the whole depot, which is what a first pass did:
+    # 117 tracks built around energy and mood axes, and no manifest carried either.
+    outcome.manifest.tags = {
+        "energy": [_tag(f"{spec.energy:.2f}")],
+        "mood": [_tag(spec.mood)],
+        "instrumental": [_tag("true")],
+    }
+
     _write_manifest(outcome.manifest, out_dir)
     (out_dir / f"{spec.name}.request.json").write_text(
         json.dumps(
@@ -328,6 +344,11 @@ def admit(
     )
     octave_note = "" if detected_level is None else f" (detected at {detected_level})"
     return True, f"measured={measured:.1f} err={errors[best]:.2f}%{octave_note}"
+
+
+def _tag(value: str, confidence: float = 1.0) -> Estimate:
+    """A specified value. Confidence 1.0 because nothing here is inferred."""
+    return Estimate(value=value, confidence=confidence)
 
 
 def _rescale_bars(manifest: AssetManifest, scale: float) -> None:

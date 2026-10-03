@@ -158,3 +158,18 @@ def test_bar_rescale_is_identity_when_tempo_agrees() -> None:
 
     assert [(s.start_bar, s.end_bar) for s in manifest.sections] == [(0, 19)]
     assert [(loop.start_bar, loop.end_bar) for loop in manifest.loops] == [(0, 8)]
+
+
+def test_specs_carry_the_tags_the_filters_match_on() -> None:
+    """Energy and mood must reach the manifest, not just the spec.
+
+    A first pass built 117 tracks around energy and mood axes and wrote neither into a manifest.
+    ``FeasibilityFilter`` matches on those tags, so every energy and mood constraint was silently
+    inert for the entire depot -- the filters looked configured and did nothing.
+    """
+    energies = ["0.10", "0.20", "0.25", "0.35", "0.45", "0.55", "0.60", "0.70", "0.80", "0.90"]
+    tags = {"energy": energies}
+    moods = set(MOODS)
+    for spec in build_specs(125):
+        assert f"{spec.energy:.2f}" in tags["energy"], f"{spec.name} energy not a known band"
+        assert spec.mood in moods

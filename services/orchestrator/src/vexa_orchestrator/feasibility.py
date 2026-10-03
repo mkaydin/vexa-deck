@@ -149,6 +149,15 @@ class FeasibilityFilter:
                 return f"energy {energy:.2f} above requested ceiling {c.max_energy:.2f}"
         if c.forbid_vocals and _has_vocals(asset):
             return "requested vocals off but asset has vocals"
+        # Tempo bounds were declared on the contract and never checked here, so "keep it under
+        # 100" or "between 118 and 126" filtered nothing. Relative tempo is handled by
+        # ``max_tempo_ratio`` elsewhere; this is the absolute bound the listener asked for, and
+        # it is a different thing.
+        bpm = asset.beat_grid.bpm
+        if c.min_bpm is not None and bpm < c.min_bpm:
+            return f"tempo {bpm:.1f} below requested floor {c.min_bpm:.1f}"
+        if c.max_bpm is not None and bpm > c.max_bpm:
+            return f"tempo {bpm:.1f} above requested ceiling {c.max_bpm:.1f}"
         return None
 
     def vocal_collision(

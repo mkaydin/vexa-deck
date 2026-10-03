@@ -530,3 +530,33 @@ def test_listener_always_sees_an_honest_status(state_value, expected):
     from vexa_contracts import RequestStatus
 
     assert RequestStatus(request_id="r", generation=1, state=state_value).user_facing == expected
+
+def test_a_tempo_band_actually_filters() -> None:
+    """``min_bpm``/``max_bpm`` were declared on the contract and never enforced.
+
+    A listener asking for "keep it under 100" got the whole library back, because
+    ``violates_constraints`` checked energy and vocals and stopped. Measured against the 127-track
+    depot, a 118-126 band excluded nothing.
+    """
+    library = [asset("slow", bpm=92.0), asset("house", bpm=124.0), asset("peak", bpm=174.0)]
+
+    kept = FeasibilityFilter().build(
+        state=session(), library=library, constraints=RequestConstraints(min_bpm=118, max_bpm=126),
+    )
+    assert [a.asset_id for a in kept.transitions] == ["house"]
+
+
+def test_tempo_bounds_compose_with_energy_bounds() -> None:
+    """Both absolute bounds apply at once, not just the last one checked."""
+    library = [
+        asset("slow_house", bpm=96.0, energy=0.40),
+        asset("right_energy", bpm=124.0, energy=0.50),
+        asset("wrong_energy", bpm=124.0, energy=0.90),
+    ]
+
+    result = FeasibilityFilter().build(
+        state=session(),
+        library=library,
+        constraints=RequestConstraints(min_bpm=118, max_bpm=126, max_energy=0.6),
+    )
+    assert [a.asset_id for a in result.transitions] == ["right_energy"]
