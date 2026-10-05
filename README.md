@@ -1,10 +1,119 @@
+<div align="center">
+  <img src="assets/icons/vexa-icon-128.png" width="96" height="96" alt="VEXA ASCII portrait app icon">
+
 # VEXA//DECK
 
-**An open-source, AI-assisted DJ that mixes prepared music and generates themed tracks in the background.**
+**Your atmosphere. Vexa's next set.**
+
+An open-source, AI-assisted DJ that mixes prepared music and generates themed tracks in the background.
+
+![Linux / Wayland](https://img.shields.io/badge/Linux-Wayland-63e3d1?style=flat-square&labelColor=0b141a)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-63e3d1?style=flat-square&labelColor=0b141a)
+![Qt 6 desktop](https://img.shields.io/badge/Desktop-Qt_6-bb98ea?style=flat-square&labelColor=0b141a)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-bb98ea?style=flat-square&labelColor=0b141a)](LICENSE)
+
+[Features](#-at-a-glance) · [Screenshots](#-desktop-preview) · [Architecture](#-how-a-set-is-built) · [Install](#install-on-linux--wayland) · [Develop](#development-quick-start)
+
+</div>
 
 VEXA//DECK is a desktop music system with a dark ASCII cyberpunk interface.
 You describe an atmosphere — *"a quiet rain-soaked jazz bar"*, *"warm house
 that becomes more energetic"* — and it builds a continuous set from prepared musical assets.
+
+## 🎛️ At a glance
+
+| | Feature | What you control |
+|---|---|---|
+| 🌒 | **Theme-driven sets** | Describe a genre, era or atmosphere; shift the vibe during a set. |
+| 🎵 | **Local music generation** | YuE2 renders a ten-track batch with named tracks and vocal/instrumental modes. |
+| 🔀 | **Continuous two-deck mixing** | Measured cues, prepared transitions and rules schedule Deck A/B. |
+| 🗃️ | **Music depot** | Browse titles, listen to tracks and delete unused entries. |
+| 🎚️ | **Five-band EQ** | Adjust bands, preamp and presets with smoothed changes. |
+| 📺 | **Looping video** | Upload local videos; choose Normal, Pixel art or ASCII art and tune effects live. |
+| 💠 | **Cyberpunk console** | Four color themes, audio spectrum, custom window controls and compact layouts. |
+| 💬 | **Listener feedback** | Save likes/dislikes for future Laya training; playback currently follows rules. |
+
+## 🖥️ Desktop preview
+
+![VEXA desktop preview with theme input, two named decks, spectrum and blank video panel](assets/docs/desktop-preview.png)
+
+*Design preview with sample track data; no audio is playing. The center stays blank until you upload a video.*
+
+<table>
+  <tr>
+    <th>🎚️ Master equalizer</th>
+    <th>🗃️ Named music depot</th>
+  </tr>
+  <tr>
+    <td><img src="assets/docs/equalizer.png" width="580" alt="Five-band master equalizer with Club preset and preamp"></td>
+    <td><img src="assets/docs/music-depot.png" width="580" alt="Depot test preview with named tracks and listen/delete controls"></td>
+  </tr>
+</table>
+
+*EQ and depot captures use test/preview data. User videos, music and model weights are not bundled.*
+
+## 🧩 How a set is built
+
+### Theme → music → mix
+
+```mermaid
+flowchart TD
+    UI["Desktop GUI · theme + vocal mode"] --> Session["Session orchestrator"]
+    Session --> Search["Search compatible prepared tracks"]
+    Search --> Depot[("Admitted music depot")]
+    Session --> Writer["Gemma writer · title, lyrics, arrangement"]
+    Writer --> Planner["ACE-Step text LM · musical metadata"]
+    Planner --> Yue["YuE2 · audio generation"]
+    Yue --> Gates["Measured duration, quality and cue gates"]
+    Gates -->|Pass| Depot
+    Gates -->|Fail| Retry["Bounded retry / visible failure"]
+    Retry --> Yue
+    Depot --> Rules["Feasibility rules + rendered transition scoring"]
+    Rules --> Prep["Prepare and stage next deck"]
+    Prep --> Audio["Host audio engine · A/B decks → EQ → limiter"]
+    Audio --> Out["Speakers / headphones"]
+    UI --> Video["Local video loop · Normal / Pixel / ASCII"]
+    UI --> Feedback["Saved feedback → future Laya training"]
+    classDef cyan fill:#0b2428,stroke:#63e3d1,color:#d8eeee;
+    classDef violet fill:#21172e,stroke:#bb98ea,color:#eee0ff;
+    classDef neutral fill:#101820,stroke:#607d86,color:#d8eeee;
+    class UI,Session,Rules,Prep,Audio,Out cyan;
+    class Writer,Planner,Yue,Video violet;
+    class Search,Depot,Gates,Retry,Feedback neutral;
+```
+
+Text planning and generation share the **RTX 5060 Ti** through a GPU lock. Generation,
+analysis and transition preparation run in separate workers; the host audio callback consumes
+prepared PCM. Uploaded videos stay muted. With no compatible depot track, the set waits for
+its first admitted render. Failed quality/cue checks retry within the batch's attempt limit;
+missing components and setup errors stop generation with a visible reason.
+
+### Continuous deck handoff
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant P as Preparation worker
+    participant A as Deck A
+    participant B as Deck B
+    participant S as Audio output
+    O->>A: Load first admitted track at file start
+    A->>S: Play
+    O->>P: Evaluate candidate and render transition preview
+    P-->>O: Prepared PCM + cue timing + measured score
+    O->>B: Stage compatible track silently
+    Note over A,B: Rules approve timing and transition
+    O->>A: Begin scheduled fade out
+    O->>B: Begin scheduled fade in
+    A->>S: Mixed output during crossfade
+    B->>S: Continue playing
+    O->>P: Prepare next track for Deck A
+    Note over A,B: Repeat with deck roles exchanged
+```
+
+The audio engine owns the fade clock and gain envelope. The diagram shows control events;
+actual audio runs in one mixer callback. Next-track preparation continues while the current
+track plays. Likes/dislikes are recorded for later training and do not change live policy yet.
 
 ## The one rule everything is built around
 

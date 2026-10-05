@@ -76,3 +76,8 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Markdown notes / documents; retain the public project README
+*.md
+*.markdown
+!/README.md

@@ -25,6 +25,7 @@ TREES = (
     "tests",
     "vexa-deck-docs",
     "assets/icons",
+    "assets/docs",
     "data/fixtures",
     "docker",
     "third_party/video-art",
