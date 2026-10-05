@@ -307,9 +307,19 @@ def detect_temporal(samples: np.ndarray, sr: int) -> TemporalAnalysis:
         seconds_per_bar = 240.0 / bpm
         total_bars = int(mono.shape[0] / REFERENCE_RATE / seconds_per_bar)
         try:
-            boundaries = librosa.segment.agglomerative(mono, frame_length=2048, hop_length=512)
+            # Agglomerative segmentation takes a feature matrix and a number of segments, not
+            # waveform samples or frame/hop arguments. Use a coarse MFCC sequence here; these
+            # remain estimated boundaries, never approved cue points.
+            hop_length = 2048
+            features = librosa.feature.mfcc(
+                y=mono, sr=REFERENCE_RATE, hop_length=hop_length, n_mfcc=13
+            )
+            segments = min(8, max(2, int(mono.shape[0] / REFERENCE_RATE / 12)))
+            boundaries = librosa.segment.agglomerative(features, k=segments)
             for boundary in boundaries:
-                seconds = float(librosa.frames_to_time(boundary, sr=REFERENCE_RATE, hop_length=512))
+                seconds = float(
+                    librosa.frames_to_time(boundary, sr=REFERENCE_RATE, hop_length=hop_length)
+                )
                 bar = int(seconds / seconds_per_bar)
                 if 0 < bar < total_bars:
                     section_bars.append(bar)

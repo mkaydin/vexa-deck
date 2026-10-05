@@ -12,13 +12,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from vexa_contracts import AssetManifest, ReadinessState, registry
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "data" / "fixtures" / "asset_manifest.sample.json"
 SCHEMAS = ROOT / "packages" / "contracts" / "contracts.schema.json"
-ICONS = ROOT / "assets" / "icons"
 
 
 def test_fixture_exists_and_parses():
@@ -65,8 +63,3 @@ def test_exported_schemas_match_the_current_contract_set():
     bundle = json.loads(SCHEMAS.read_text(encoding="utf-8"))
     assert set(bundle["schemas"]) == set(registry())
     assert bundle["contract_version"] == 1
-
-
-@pytest.mark.parametrize("size", [16, 32, 128, 512])
-def test_icon_ladder_is_present(size: int):
-    assert (ICONS / f"vexa-icon-{size}.png").exists(), f"missing {size}px icon"

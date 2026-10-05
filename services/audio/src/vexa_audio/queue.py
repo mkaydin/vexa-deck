@@ -22,6 +22,8 @@ from enum import Enum
 
 import numpy as np
 
+from .loader import PreloadedTrack
+
 
 class CommandKind(Enum):
     """What the callback can be told to do. Deliberately a closed set.
@@ -53,6 +55,8 @@ class Command:
     value2: float = 0.0
     #: When set, the command applies only once the transport reaches this bar.
     at_bar: int | None = None
+    #: Ready PCM reference; installed together with position/fade state at a block boundary.
+    track: PreloadedTrack | None = None
 
 
 @dataclass(slots=True)

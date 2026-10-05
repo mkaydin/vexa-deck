@@ -29,6 +29,8 @@ from pathlib import Path
 
 from vexa_contracts import BackendKind, GenerationBrief, GenerationJob, GenerationResult
 
+from .runtime import native_environment
+
 
 class BackendUnavailable(RuntimeError):
     """The backend cannot run here. Never fatal: another backend, or the queue, takes over."""
@@ -211,6 +213,7 @@ class SubprocessBackend(GenerationBackend):
                 text=True,
                 timeout=self.timeout_s,
                 cwd=self.workdir,
+                env=native_environment(argv[0]),
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; media-src file:; connect-src 'self';">
+  <title>VEXA local video</title>
+  <style>
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#080c10; }
+    video, canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    video { display:none; }
+    canvas { display:none; }
+  </style>
+</head>
+<body>
+  <video id="source" muted playsinline preload="auto"></video>
+  <canvas id="pixel"></canvas>
+  <canvas id="ascii"></canvas>
+  <script src="renderer.js"></script>
+</body>
+</html>

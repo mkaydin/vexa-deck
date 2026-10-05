@@ -213,9 +213,17 @@ def test_beat_grid_refuses_to_promise_loops_when_the_tempo_is_ambiguous(tmp_path
     noise = np.random.default_rng(0).normal(0, 0.2, (SR * 20, 2))
     write_wav(path, noise)
     outcome = analyse(path, asset_id="ambient")
-    if not outcome.quality.beat_grid_ok:
-        assert not outcome.quality.loop_boundary_ok
-        assert outcome.temporal is None or outcome.temporal.beat_confidence < 0.6
+    assert outcome.manifest is not None
+    assert outcome.manifest.loops == []
+
+
+def test_tempo_alone_does_not_create_a_verified_loop(tmp_path):
+    path = tmp_path / "click.wav"
+    write_wav(path, np.stack([click_track(40.0)] * 2, axis=1))
+    outcome = analyse(path, asset_id="click")
+    assert outcome.manifest is not None
+    assert outcome.quality.beat_grid_ok
+    assert outcome.manifest.loops == []
 
 
 def test_thresholds_are_adjustable_without_touching_the_logic(tmp_path):

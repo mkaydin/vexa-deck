@@ -54,3 +54,15 @@ __pycache__/
 docker-compose*.yml
 Dockerfile*
 .dockerignore
+# Local video library and release/native artifacts
+vexa-videos/
+output/
+dist/
+build/
+third_party/yue2.cpp/
+.aws/
+.codex/
+.agents/
+*.pth
+*.onnx
+*.ggml

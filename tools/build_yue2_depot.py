@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -37,10 +36,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "workers/yue2/src"))
 
-from vexa_contracts import ApprovalState, AssetManifest, Provenance  # noqa: E402
+from vexa_contracts import (  # noqa: E402
+    ApprovalState,
+    AssetManifest,
+    Estimate,
+    Provenance,
+)
 from vexa_yue2.backends import primary_gpu  # noqa: E402
 from vexa_yue2.gates import analyse  # noqa: E402
 from vexa_yue2.master import master  # noqa: E402
+from vexa_yue2.runtime import native_environment  # noqa: E402
 
 BACKEND = ROOT / "third_party" / "yue2.cpp"
 BINARY = BACKEND / "build" / "yue-synth"
@@ -183,7 +188,7 @@ def render(brief: DepotBrief, wav: Path, gpu: int, *, max_seq: int, steps: int) 
          "--duration", str(brief.duration_s), "--steps", str(steps),
          "--max-seq", str(max_seq)],
         capture_output=True, text=True,
-        env={**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)},
+        env={**native_environment(BINARY), "CUDA_VISIBLE_DEVICES": str(gpu)},
         check=False,
     )
     if completed.returncode != 0:
@@ -209,6 +214,14 @@ def admit(brief: DepotBrief, wav: Path, *, approve: bool) -> tuple[bool, str]:
     if not outcome.admitted:
         flags = ", ".join(outcome.quality.flags) or "unnamed"
         return False, f"gates failed: {flags}"
+    # Descriptive tags are what the retrieval filters match on, and energy and mood are *specified*
+    # by the brief rather than inferred, so confidence is 1.0. Omitting them leaves every energy
+    # and mood constraint inert for the whole depot while the filters still look configured.
+    outcome.manifest.tags = {
+        "energy": [Estimate(value=f"{brief.energy:.2f}", confidence=1.0)],
+        "mood": [Estimate(value=brief.mood, confidence=1.0)],
+        "instrumental": [Estimate(value="true", confidence=1.0)],
+    }
     _write_manifest(outcome.manifest, wav.parent)
     key = outcome.manifest.key.value if outcome.manifest.key else "?"
     return True, f"{outcome.manifest.beat_grid.bpm:.1f} BPM  key={key}"

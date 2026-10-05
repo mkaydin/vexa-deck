@@ -207,64 +207,49 @@ class TrackCache:
 
 
 class MasterLimiter:
-    """A lookahead peak limiter for the master bus.
+    """Stereo linked sample peak limiter with a continuous 250 ms release.
 
-    A limiter is not optional here: the docs require a master limiter before output
-    (``PRODUCT.md:49``), and a crossfade between two tracks that were each mixed near full scale
-    can exceed unity even when neither does on its own.
-
-    Delay line and envelope are **preallocated**. The callback never allocates, never locks, and
-    never calls into a library that might.
+    Instant attack protects the output ceiling. The gain envelope persists across callbacks;
+    unlike a block peak limiter it cannot jump back to unity on each quiet block. This is
+    sample peak protection, not an oversampled true peak or lookahead limiter.
+    Working arrays are allocated once and the returned output is reused.
     """
 
-    __slots__ = ("_channels", "_delay", "_env", "_frames", "_gain", "_index", "ceiling")
-
-    def __init__(self, *, frames: int, channels: int = 2, ceiling: float = 0.891) -> None:
-        self._delay = np.zeros((frames, channels), dtype=np.float32)
-        self._index = 0
-        self._frames = frames
-        self._channels = channels
-        #: -1 dBFS, so the limiter leaves headroom for device and container conversions.
+    def __init__(self, *, frames: int, channels: int = 2, ceiling: float = 0.891,
+                 sample_rate: int = 44100) -> None:
+        if frames < 1 or channels < 1 or not 0 < ceiling <= 1 or sample_rate < 1:
+            raise ValueError("invalid limiter configuration")
         self.ceiling = ceiling
         self._gain = 1.0
-        self._env = 0.0
-
-    def _push(self, block: np.ndarray) -> None:
-        n = block.shape[0]
-        for offset in range(n):
-            row = (self._index + offset) % self._frames
-            self._delay[row] = block[offset]
-
-    def _pop(self, n: int) -> np.ndarray:
-        out = np.zeros((n, self._channels), dtype=np.float32)
-        for offset in range(n):
-            row = (self._index + offset) % self._frames
-            out[offset] = self._delay[row]
-        return out
+        self._out = np.empty((frames, channels), dtype=np.float32)
+        self._absolute = np.empty_like(self._out)
+        self._peak = np.empty(frames, dtype=np.float64)
+        self._envelope = np.empty(frames, dtype=np.float64)
+        # deficit[i] = max(required_deficit[i], release * deficit[i-1]).
+        # Dividing by release**i turns the recurrence into a vectorized cumulative max.
+        self._release = np.exp(-np.arange(1, frames + 1) / (sample_rate * 0.25))
+        self._inverse_release = 1 / self._release
 
     def process(self, block: np.ndarray) -> np.ndarray:
-        """Limit a block in place-adjacent fashion, returning the processed block.
-
-        The returned array is preallocated and reused, so the caller must consume it before the
-        next call. That is the right trade for a fixed callback contract.
-        """
-        self._push(block)
-        n = block.shape[0]
-        out = self._pop(n)
-        self._index = (self._index + n) % self._frames
-
-        peak = float(np.max(np.abs(out))) if out.size else 0.0
-        if peak > self.ceiling:
-            self._gain = min(self._gain, self.ceiling / peak)
-        else:
-            # Release slowly so a momentary peak does not pump audibly.
-            self._gain = min(1.0, self._gain * 1.0005 + (1.0 - self._gain))
-
-        if self._gain < 1.0:
-            out *= self._gain
-        return out
+        n = len(block)
+        if n > len(self._out):
+            raise ValueError("audio block exceeds limiter capacity")
+        if not n:
+            return self._out[:0]
+        peak, envelope = self._peak[:n], self._envelope[:n]
+        np.abs(block, out=self._absolute[:n])
+        np.maximum.reduce(self._absolute[:n], axis=1, out=peak)
+        np.maximum(peak, self.ceiling, out=peak)
+        np.divide(self.ceiling, peak, out=envelope)
+        np.subtract(1.0, envelope, out=envelope)
+        np.multiply(envelope, self._inverse_release[:n], out=envelope)
+        np.maximum(envelope, 1.0 - self._gain, out=envelope)
+        np.maximum.accumulate(envelope, out=envelope)
+        np.multiply(envelope, self._release[:n], out=envelope)
+        np.subtract(1.0, envelope, out=envelope)
+        self._gain = float(envelope[-1])
+        np.multiply(block, envelope[:, None], out=self._out[:n])
+        return self._out[:n]
 
     def reset(self) -> None:
-        self._delay[:] = 0.0
-        self._index = 0
         self._gain = 1.0

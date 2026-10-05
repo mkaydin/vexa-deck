@@ -189,7 +189,10 @@ class FeasibilityFilter:
             return None
         if candidate.key.confidence < self.config.key_confidence_floor:
             return None
-        if _mode(current.key.value) != _mode(candidate.key.value):
+        current_mode = _mode(current.key.value)
+        candidate_mode = _mode(candidate.key.value)
+        if current_mode != candidate_mode and not _relative_keys(
+                current.key.value, candidate.key.value):
             return f"mode clash ({current.key.value} -> {candidate.key.value})"
         return None
 
@@ -363,6 +366,19 @@ def _mode(key: str) -> str:
     if tail in ("major", "maj"):
         return "major"
     return tail
+
+
+def _relative_keys(left: str, right: str) -> bool:
+    """Relative major/minor share a key signature and can crossfade safely."""
+    roots = {"C": 0, "C#": 1, "DB": 1, "D": 2, "D#": 3, "EB": 3,
+             "E": 4, "F": 5, "F#": 6, "GB": 6, "G": 7, "G#": 8,
+             "AB": 8, "A": 9, "A#": 10, "BB": 10, "B": 11}
+    a = roots.get(left.split()[0].upper())
+    b = roots.get(right.split()[0].upper())
+    if a is None or b is None:
+        return False
+    return ((_mode(left) == "major" and _mode(right) == "minor" and (a - b) % 12 == 3)
+            or (_mode(left) == "minor" and _mode(right) == "major" and (b - a) % 12 == 3))
 
 
 def revalidate(

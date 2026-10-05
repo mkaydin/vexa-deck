@@ -72,11 +72,12 @@
           "type": "object"
         },
         "BackendKind": {
-          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.\n\n``DRY_RUN`` is a test fixture that writes a tone instead of calling a model. It has its own\nidentity precisely so it can never be mistaken for, or routed in place of, a real backend.",
           "enum": [
             "yue2.cpp",
             "torch",
-            "audio.cpp"
+            "audio.cpp",
+            "dry_run"
           ],
           "title": "BackendKind",
           "type": "string"
@@ -530,6 +531,20 @@
           },
           "title": "Tags",
           "type": "object"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
         },
         "version": {
           "default": 1,
@@ -1288,11 +1303,12 @@
     "GenerationJob": {
       "$defs": {
         "BackendKind": {
-          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.\n\n``DRY_RUN`` is a test fixture that writes a tone instead of calling a model. It has its own\nidentity precisely so it can never be mistaken for, or routed in place of, a real backend.",
           "enum": [
             "yue2.cpp",
             "torch",
-            "audio.cpp"
+            "audio.cpp",
+            "dry_run"
           ],
           "title": "BackendKind",
           "type": "string"
@@ -1548,11 +1564,12 @@
     "GenerationResult": {
       "$defs": {
         "BackendKind": {
-          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.\n\n``DRY_RUN`` is a test fixture that writes a tone instead of calling a model. It has its own\nidentity precisely so it can never be mistaken for, or routed in place of, a real backend.",
           "enum": [
             "yue2.cpp",
             "torch",
-            "audio.cpp"
+            "audio.cpp",
+            "dry_run"
           ],
           "title": "BackendKind",
           "type": "string"
@@ -1773,11 +1790,12 @@
     "Provenance": {
       "$defs": {
         "BackendKind": {
-          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.",
+          "description": "Generation backends. Selected per job by capacity \u2014 see PLAN.md \u00a73.4.\n\n``DRY_RUN`` is a test fixture that writes a tone instead of calling a model. It has its own\nidentity precisely so it can never be mistaken for, or routed in place of, a real backend.",
           "enum": [
             "yue2.cpp",
             "torch",
-            "audio.cpp"
+            "audio.cpp",
+            "dry_run"
           ],
           "title": "BackendKind",
           "type": "string"

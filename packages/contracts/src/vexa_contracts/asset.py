@@ -196,6 +196,8 @@ class AssetManifest(Contract):
     """
 
     asset_id: str = Field(min_length=1)
+    #: Optional display label; does not identify the audio or participate in content hashes.
+    title: str | None = Field(default=None, min_length=1, max_length=80)
     family_id: str = Field(min_length=1)
     source_type: SourceType
     parent_id: str | None = None

@@ -2,7 +2,7 @@
 
 **An open-source, AI-assisted DJ that starts playing immediately and composes its future in the background.**
 
-VEXA//DECK is a desktop-first music system with a pixel-art cyberpunk interface and a character named Vexa behind the decks. A listener describes an atmosphere—"a quiet rain-soaked jazz bar," "warm house that becomes more energetic," or "keep the rhythm but remove the vocals"—and the system builds a continuous set from prepared musical assets. It can also prepare a themed library before playback. While a set is running, new requests can change the direction of the mix; assets that do not exist yet are generated asynchronously and introduced when ready.
+VEXA//DECK is a desktop-first music system with a dark ASCII cyberpunk interface and a local looping video panel with Normal, Pixel and ASCII modes. A listener describes an atmosphere—"a quiet rain-soaked jazz bar," "warm house that becomes more energetic," or "keep the rhythm but remove the vocals"—and the system builds a continuous set from prepared musical assets. It can also prepare a themed library before playback. While a set is running, new requests can change the direction of the mix; assets that do not exist yet are generated asynchronously and introduced when ready.
 
 This is a **non-commercial project**. The application source can be published openly, while model weights, generated audio, and third-party datasets remain separate artifacts governed by their own terms. The application should work without a proprietary planning service by providing a local/rule-based planning adapter; GPT-6 Sol is an optional planner, not a requirement for basic playback.
 
@@ -32,7 +32,7 @@ This is a **non-commercial project**. The application source can be published op
 | Laya decision service | Fast selection among a small set of feasible next actions |
 | Planner adapter | Interprets user intent and shapes the set; GPT-6 Sol is one optional implementation |
 | YuE2 worker | Generates new songs/arrangements in the background or during preparation |
-| GUI | Vexa character, decks, library, upcoming transitions, request and generation state |
+| GUI | Local video styles/settings, decks, library, upcoming transitions, request and generation state |
 
 ## Important model boundaries
 
@@ -44,7 +44,7 @@ YuE2 publicly exposes song-level stereo generation and symbolic planning. It is 
 - [Technical architecture](ARCHITECTURE.md): runtime services, data model, scheduling, interfaces, and failure handling.
 - [Laya and data plan](LAYA_DATA.md): dataset research, labeling, fine-tuning, evaluation, and provenance.
 - [Roadmap](ROADMAP.md): implementation phases, acceptance criteria, and risks.
-- [Visual direction](VISUAL_DIRECTION.md): pixel-art GUI and Vexa character brief.
+- [Visual direction](VISUAL_DIRECTION.md): dark ASCII cyberpunk GUI and local video modes.
 - [Ideas backlog](IDEAS.md): distinctive features and experiments beyond the initial release.
 
 ## Proposed repository layout

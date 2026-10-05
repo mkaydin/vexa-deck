@@ -149,10 +149,17 @@ def test_forbid_vocals_filters_tagged_assets():
 
 def test_mode_clash_is_refused_but_unknown_key_is_permissive():
     clash = FeasibilityFilter().build(
-        state=session(), library=[asset("a", key="C major")],
+        state=session(), library=[asset("a", key="C# major")],
         current_asset=asset("c", key="A minor"),
     )
     assert clash.transitions == []
+
+    # Relative major/minor share a key signature; the existing playback policy permits them.
+    relative = FeasibilityFilter().build(
+        state=session(), library=[asset("a", key="C major")],
+        current_asset=asset("c", key="A minor"),
+    )
+    assert len(relative.transitions) == 1
 
     unknown = FeasibilityFilter().build(
         state=session(), library=[asset("a", key=None)],

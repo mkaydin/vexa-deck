@@ -186,30 +186,11 @@ def analyse(
         )
 
     # -- loop boundary ------------------------------------------------------
-    # Loop boundaries. This gate *verifies proposed loops*; it does not require one to exist.
-    # A full track with usable sections is perfectly playable without an 8-bar loop, and
-    # quarantining it would contradict ROADMAP.md:51's "prefer full tracks and verified sections".
-    # What is refused is proposing a loop the grid cannot support.
+    # A tempo estimate alone cannot verify a loop: it says nothing about the first downbeat,
+    # changing tempo, or whether the end joins cleanly to the start. Keep the full track and its
+    # estimated sections playable; a later cue-review step may add approved loops.
     loops: list[LoopPoints] = []
-    if temporal is not None and temporal.bpm > 0:
-        seconds_per_bar = 240.0 / temporal.bpm
-        total_bars = int(probe.duration_s / seconds_per_bar)
-        if quality.beat_grid_ok and total_bars >= 16:
-            # An 8-bar loop starting on bar 0 is beat-aligned by construction.
-            loops.append(LoopPoints(start_bar=0, end_bar=8, beat_aligned=True))
-        elif not quality.beat_grid_ok:
-            quality.flags.append(
-                "beat grid is ambiguous, so no loop will be proposed; sections remain usable"
-            )
-        elif 0 < total_bars < 16:
-            quality.flags.append(
-                f"only {total_bars} bars detected; too short to cut a verified 8-bar loop"
-            )
-    else:
-        quality.flags.append("no tempo detected; sections remain the only entry points")
-
-    # Vacuously true when no loop was proposed.
-    quality.loop_boundary_ok = all(loop.beat_aligned for loop in loops)
+    quality.loop_boundary_ok = True  # No unverified loop has been proposed.
 
     sections: list[SectionMarker] = []
     if temporal is not None and temporal.bpm > 0:

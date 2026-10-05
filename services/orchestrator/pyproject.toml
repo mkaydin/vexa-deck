@@ -5,6 +5,8 @@ description = "Deterministic control plane: feasibility filter, rule policy, sch
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "vexa-contracts",
+    "vexa-audio",
+    "vexa-yue2-worker",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "httpx>=0.27",

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .equalizer import MasterEqualizer
 from .loader import MasterLimiter, PreloadedTrack
 from .queue import Clock, Command, CommandKind, CommandQueue
 
@@ -50,6 +51,8 @@ class DeckState:
     fade_target: float = 1.0
     #: Frames of crossfade remaining. Zero means the gain has arrived.
     fade_remaining: int = 0
+    fade_total: int = 0
+    fade_is_in: bool = True
     #: Restart at the top instead of stopping at the end. DJ beds and short loops are meant to
     #: run indefinitely, and looping is also what lets a soak test run for half an hour from a
     #: few seconds of audio, instead of half an hour of audio resident in memory.
@@ -77,6 +80,7 @@ class MixStats:
 
     callbacks: int = 0
     underruns: int = 0
+    output_underflows: int = 0
     frames_rendered: int = 0
     worst_callback_s: float = 0.0
     silence_blocks: int = 0
@@ -112,8 +116,11 @@ class Mixer:
         self._out = np.zeros((max_block, channels), dtype=np.float32)
         self._scratch_a = np.zeros((max_block, channels), dtype=np.float32)
         self._scratch_b = np.zeros((max_block, channels), dtype=np.float32)
-        self._limiter = MasterLimiter(frames=8192, channels=channels)
+        self._fade_index = np.arange(max_block, dtype=np.float32)
+        self._fade_curve = np.empty(max_block, dtype=np.float32)
+        self._limiter = MasterLimiter(frames=max_block, channels=channels, sample_rate=sample_rate)
 
+        self.equalizer = MasterEqualizer(sample_rate, channels)
         self._running = False
 
     # -- engine-facing API; never called from the callback -----------------
@@ -168,14 +175,15 @@ class Mixer:
         self._render_deck(self.decks[1], self._scratch_b, usable)
 
         mix = self._out
-        mix[:usable] = self._scratch_a[:usable] + self._scratch_b[:usable]
+        np.add(self._scratch_a[:usable], self._scratch_b[:usable], out=mix[:usable])
         if usable < frames:
-            mix[usable:frames] = 0.0
+            outdata[usable:frames] = 0.0
 
         if not np.any(mix[:frames]):
             self.stats.silence_blocks += 1
 
-        outdata[:frames] = self._limiter.process(mix[:frames])
+        self.equalizer.process(mix[:usable])
+        outdata[:usable] = self._limiter.process(mix[:usable])
         self.clock.advance(frames)
         self._advance_fades(frames)
 
@@ -187,35 +195,51 @@ class Mixer:
             return
         if deck.position >= track.frames:
             if deck.loop:
-                deck.position = 0
+                deck.position = deck.cue_point
             else:
                 deck.playing = False
                 return
 
-        gain = deck.gain * deck.fade_gain
-        if gain <= 0.0:
-            return
-
-        available = track.frames - deck.position
-        take = frames if frames < available else available
-        if take <= 0:
+        if deck.cue_point >= track.frames:
             deck.playing = False
             return
 
-        # Integer slice: a view, no copy, no allocation.
-        chunk = track.samples[deck.position : deck.position + take]
-        target[:take] = chunk * gain
+        written = 0
+        while written < frames:
+            available = track.frames - deck.position
+            take = min(frames - written, available)
+            if take <= 0:
+                break
+            target[written : written + take] = track.samples[
+                deck.position : deck.position + take
+            ]
+            written += take
+            if abs(deck.tempo_ratio - 1.0) < 0.001:
+                deck.position += take
+            else:
+                deck.position += max(1, int(take * deck.tempo_ratio))
+            if deck.position >= track.frames:
+                if deck.loop:
+                    deck.position = deck.cue_point
+                else:
+                    deck.playing = False
+                    break
 
-        # Tempo is applied as a resampled read rate. Near 1.0 the integer skip is exact enough
-        # and costs nothing; a real ratio belongs to the audio engine's resampler, not here.
-        if abs(deck.tempo_ratio - 1.0) < 0.001:
-            deck.position += take
+        if deck.fade_remaining > 0 and deck.fade_total > 0:
+            np.add(self._fade_index[:written],
+                   deck.fade_total - deck.fade_remaining,
+                   out=self._fade_curve[:written])
+            self._fade_curve[:written] /= deck.fade_total
+            np.clip(self._fade_curve[:written], 0.0, 1.0,
+                    out=self._fade_curve[:written])
+            self._fade_curve[:written] *= np.pi / 2.0
+            if deck.fade_is_in:
+                np.sin(self._fade_curve[:written], out=self._fade_curve[:written])
+            else:
+                np.cos(self._fade_curve[:written], out=self._fade_curve[:written])
+            target[:written] *= self._fade_curve[:written, None] * deck.gain
         else:
-            deck.position += max(1, int(take * deck.tempo_ratio))
-
-        # Looping decks wrap to the top on the next block; others stop.
-        if deck.position >= track.frames and not deck.loop:
-            deck.playing = False
+            target[:written] *= deck.gain * deck.fade_gain
 
     def _advance_fades(self, frames: int) -> None:
         """Interpolate each deck's crossfade gain toward its target.
@@ -227,17 +251,16 @@ class Mixer:
             if deck.fade_remaining <= 0:
                 continue
             self.stats.fade_blocks += 1
-            span = max(1, deck.fade_remaining)
-            delta = deck.fade_target - deck.fade_gain
-            gain = deck.fade_gain + delta * min(1.0, frames / span)
-            # If this block crossed the target, snap rather than overshoot into a gain above 1.
-            if delta * (deck.fade_target - gain) < 0:
-                gain = deck.fade_target
-            deck.fade_gain = gain
             deck.fade_remaining -= frames
             if deck.fade_remaining <= 0:
                 deck.fade_remaining = 0
                 deck.fade_gain = deck.fade_target
+            else:
+                fraction = 1.0 - deck.fade_remaining / deck.fade_total
+                deck.fade_gain = (
+                    float(np.sin(fraction * np.pi / 2)) if deck.fade_is_in
+                    else float(np.cos(fraction * np.pi / 2))
+                )
 
     # -- commands -----------------------------------------------------------
 
@@ -262,24 +285,42 @@ class Mixer:
             case CommandKind.CUE:
                 deck.position = deck.cue_point
             case CommandKind.LOAD_TRACK:
-                # The audio itself is installed by pointer from the loader thread; the callback
-                # only reacts to playback intent.
-                if command.value > 0:
-                    deck.position = 0
-                    deck.fade_gain = 1.0
-                    deck.fade_target = 1.0
-                    deck.fade_remaining = 0
-                    deck.playing = True
+                if command.track is not None:
+                    deck.track = command.track
+                # Install PCM and reset state together, before rendering either deck.
+                deck.position = (
+                    max(0, min(deck.track.frames, int(command.value2)))
+                    if deck.track else 0
+                )
+                deck.cue_point = deck.position
+                deck.fade_gain = 1.0
+                deck.fade_target = 1.0
+                deck.fade_remaining = 0
+                deck.fade_total = 0
+                deck.playing = command.value > 0
             case CommandKind.START_CROSSFADE:
+                if command.track is not None:
+                    deck.track = command.track
                 # The incoming deck fades up; the outgoing one fades down. Both keep playing
                 # through the overlap, which is what makes this a crossfade rather than a cut.
                 deck.fade_gain = 0.0
+                deck.position = (
+                    max(0, min(deck.track.frames, int(command.value)))
+                    if deck.track else 0
+                )
+                deck.cue_point = deck.position
                 deck.fade_target = 1.0
                 deck.fade_remaining = max(1, frames)
+                deck.fade_total = max(1, frames)
+                deck.fade_is_in = True
                 deck.playing = True
                 other = self._deck(1 - deck.index)
+                # A deck previously faded out must be restored when it becomes incoming again.
+                other.fade_gain = max(0.0, other.fade_gain)
                 other.fade_target = 0.0
                 other.fade_remaining = max(1, frames)
+                other.fade_total = max(1, frames)
+                other.fade_is_in = False
             case CommandKind.EMERGENCY_STOP:
                 for d in self.decks:
                     d.playing = False
@@ -307,6 +348,7 @@ class Mixer:
     def snapshot(self) -> dict[str, object]:
         """A plain-data view for the control plane. Never called from the callback."""
         def deck(d: DeckState) -> dict[str, object]:
+            fade_total, fade_remaining = d.fade_total, d.fade_remaining
             return {
                 "loaded": d.loaded,
                 "playing": d.playing,
@@ -314,6 +356,9 @@ class Mixer:
                 "position": d.position,
                 "gain": round(d.gain * d.fade_gain, 4),
                 "fading": d.fading,
+                "fade_progress": round(max(0.0, min(1.0, 1.0 - fade_remaining / fade_total)), 5)
+                if fade_total else 0.0,
+                "fade_duration_s": round(fade_total / self.sample_rate, 5),
             }
 
         return {
@@ -325,6 +370,7 @@ class Mixer:
             "stats": {
                 "callbacks": self.stats.callbacks,
                 "underruns": self.stats.underruns,
+                "output_underflows": self.stats.output_underflows,
                 "frames": self.stats.frames_rendered,
                 "worst_callback_ms": round(self.stats.worst_callback_s * 1000, 3),
                 "silence_blocks": self.stats.silence_blocks,

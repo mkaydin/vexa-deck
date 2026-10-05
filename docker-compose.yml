@@ -41,6 +41,7 @@ services:
     environment:
       VEXA_HOST: "0.0.0.0"
       VEXA_PORT: "8000"
+      VEXA_LIVE: "0"
       VEXA_LOG_LEVEL: "${VEXA_LOG_LEVEL:-info}"
       VEXA_REDIS_URL: "redis://redis:6379/0"
       # Where the host-side workers reach this service. Model workers run outside compose, so

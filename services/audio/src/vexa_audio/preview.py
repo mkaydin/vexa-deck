@@ -73,6 +73,9 @@ class PreviewRenderer:
         *,
         out_name: str,
         entry_bar: int = 0,
+        incoming_entry_bar: int = 0,
+        outgoing_start_s: float | None = None,
+        incoming_entry_s: float | None = None,
     ) -> Preview:
         """One clip: the tail of ``outgoing`` crossfading into the head of ``incoming``.
 
@@ -86,28 +89,22 @@ class PreviewRenderer:
         tail = int(spec.tail_s * sr)
         total = lead + fade + tail
 
+        a = _slice_from(outgoing, entry_bar, lead + fade, self.channels,
+                        start_s=outgoing_start_s)
+        b = _slice_from(incoming, incoming_entry_bar, fade + tail, self.channels,
+                        start_s=incoming_entry_s)
+        if len(a) != lead + fade or len(b) != fade + tail:
+            raise ValueError("preview cue extends beyond an audio asset")
+
         audio = np.zeros((total, self.channels), dtype=np.float32)
-
-        a = _slice_from(outgoing, entry_bar, lead + fade, self.channels)
-        if a is not None:
-            start, block = a
-            n = min(len(block), total - start)
-            audio[start : start + n] += block[:n]
-
-        b = _slice_from(incoming, 0, fade + tail, self.channels)
-        if b is not None:
-            start, block = b
-            n = min(len(block), total - start)
-            audio[start : start + n] += block[:n]
-
-        if lead + fade <= total:
-            ramp = np.linspace(0.0, 1.0, min(fade, total - lead), dtype=np.float32)
-            span = min(fade, total - lead)
-            # Equal power: cos/sin rather than the linear 0->1 pair.
-            audio[lead : lead + span] = (
-                audio[lead : lead + span] * np.cos(ramp * np.pi / 2)[:, None]
-                + audio[lead : lead + span] * np.sin(ramp * np.pi / 2)[:, None]
+        audio[:lead] = a[:lead]
+        if fade:
+            ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            audio[lead : lead + fade] = (
+                a[lead:] * np.cos(ramp * np.pi / 2)[:, None]
+                + b[:fade] * np.sin(ramp * np.pi / 2)[:, None]
             )
+        audio[lead + fade :] = b[fade:]
 
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
         if peak > 0.891:  # -1 dBFS, same ceiling the master limiter uses
@@ -116,6 +113,18 @@ class PreviewRenderer:
         path = self.out_dir / f"{out_name}.wav"
         _write(path, audio, sr)
         return Preview(label=spec.label, path=path, duration_s=total / sr)
+
+    def render_hold(
+        self, spec: PreviewSpec, track: PreloadedTrack, *, out_name: str, entry_bar: int = 0
+    ) -> Preview:
+        """Render the actual continue option without a restart or a crossfade."""
+        frames = int((spec.lead_in_s + spec.fade_s + spec.tail_s) * self.sample_rate)
+        audio = _slice_from(track, entry_bar, frames, self.channels)
+        if len(audio) != frames:
+            raise ValueError("hold preview extends beyond an audio asset")
+        path = self.out_dir / f"{out_name}.wav"
+        _write(path, audio, self.sample_rate)
+        return Preview(spec.label, path, frames / self.sample_rate)
 
     def render_comparison(
         self,
@@ -135,11 +144,12 @@ class PreviewRenderer:
         self.clear(name)
         results: dict[str, Preview] = {}
         for index, (label, track) in enumerate(candidates):
-            results[label] = self.render_transition(
-                PreviewSpec(label=label, lead_in_s=lead_in_s, fade_s=fade_s),
-                outgoing,
-                track,
-                out_name=f"{name}_{index}_{_slug(label)}",
+            spec = PreviewSpec(label=label, lead_in_s=lead_in_s, fade_s=fade_s)
+            out_name = f"{name}_{index}_{_slug(label)}"
+            results[label] = (
+                self.render_hold(spec, outgoing, out_name=out_name)
+                if label == "continue_current"
+                else self.render_transition(spec, outgoing, track, out_name=out_name)
             )
         return results
 
@@ -172,19 +182,19 @@ class PreviewRenderer:
 
 
 def _slice_from(
-    track: PreloadedTrack, entry_bar: int, frames: int, channels: int
-) -> tuple[int, np.ndarray] | None:
-    """A block of samples starting at ``entry_bar``, as ``(start_offset, block)``."""
-    start = track.sample_at_bar(entry_bar) if track.can_seek_by_bar else entry_bar
+    track: PreloadedTrack, entry_bar: int, frames: int, channels: int,
+    *, start_s: float | None = None,
+) -> np.ndarray:
+    """Source samples from a cue; the caller decides where they land in the preview."""
+    start = (round(start_s * track.sample_rate) if start_s is not None else
+             track.sample_at_bar(entry_bar) if track.can_seek_by_bar else entry_bar)
     start = max(0, min(start, track.frames))
     block = track.samples[start : start + frames]
-    if block.size == 0:
-        return None
     if block.shape[1] != channels:
         block = block[:, :channels] if block.shape[1] > channels else np.repeat(
             block, channels // block.shape[1] + 1, axis=1
         )[:, :channels]
-    return start, block
+    return block
 
 
 def _write(path: Path, audio: np.ndarray, sr: int) -> None:

@@ -32,6 +32,7 @@ from vexa_contracts import ApprovalState, AssetManifest, Estimate  # noqa: E402
 from vexa_yue2.backends import primary_gpu  # noqa: E402
 from vexa_yue2.gates import GateThresholds, analyse  # noqa: E402
 from vexa_yue2.master import master  # noqa: E402
+from vexa_yue2.runtime import native_environment  # noqa: E402
 
 BACKEND = ROOT / "third_party" / "yue2.cpp"
 BINARY = BACKEND / "build" / "yue-synth"
@@ -148,10 +149,8 @@ def render(spec: BriefSpec, *, gpu: int, max_seq: int, steps: int) -> tuple[Path
         "--score", str(score), "--max-seq", str(max_seq),
     ]
     env = {"CUDA_VISIBLE_DEVICES": str(gpu)}
-    import os
-
     completed = subprocess.run(
-        cmd, capture_output=True, text=True, env={**os.environ, **env}, check=False
+        cmd, capture_output=True, text=True, env={**native_environment(BINARY), **env}, check=False
     )
     if completed.returncode != 0:
         raise RuntimeError(

@@ -8,23 +8,16 @@ beat.
 
 These are the measurements that close that gap:
 
-* **Chord progression** -- the real compatibility signal. Key compatibility is necessary and nowhere
-  near sufficient; two tracks in the same key share a progression only some of the time.
-* **Tuning** -- distance from A=440. Beatmatching within 1 % needs this, and it is the difference
-  between a transition that locks and one that drifts.
-* **Onset-grid alignment** -- steady against syncopated. A crossfade between the two is audible as
-  a mistake however well the tempo matches. Measured as how much onset energy lands on the beat
-  lattice; deliberately *not* called "four on the floor", because brushed jazz and a house kick
-  are both steady on the grid and the measurement does not distinguish them.
+* **Chord labels** -- rough harmony estimates from the full mix, not a transcription.
+* **Tuning** -- estimated concert-pitch offset. Unknown is recorded as unknown.
+* **Onset-grid alignment** -- the fraction of detected transients close to detected beats. This
+  alone does not identify a drum pattern or classify a track as suitable for mixing.
 * **Tonal balance** -- low against high energy. Warm versus bright is a real perceptual axis and
   currently unrepresented.
 
-**Essentia was evaluated and rejected.** ``idea1.md`` recommends it, and the measurement says it
-adds nothing: after correcting a silent sample-rate assumption it agreed with the existing tempo
-and key analysis on 11 of 14 and 12 of 14 tracks respectively -- equal, not better. It also
-assumes 44100 Hz and takes no sample-rate argument, so fed 48 kHz audio it returns numbers 8.8 % low
-that look entirely plausible. Chords here come from librosa CQT chroma instead, which needs no
-resampling and no new dependency.
+An earlier 14-track Essentia tempo/key comparison found no clear improvement. This extractor uses
+librosa CQT chroma without a new dependency. Its descriptors remain estimates until checked against
+listening or annotated audio.
 
 Spot-checked against known-good musical results: one D-major track reads
 ``D major -> B minor -> G major -> F# minor`` (I-vi-IV-ii), and an F-minor one alternates
@@ -42,6 +35,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -62,6 +56,7 @@ ROOT_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 #: How many chord labels to keep per track. Enough to characterise a progression without turning the
 #: sidecar into a transcript.
 MAX_CHORD_LABELS = 16
+EXTRACTOR_VERSION = 3
 
 
 def _mono(path: Path) -> tuple[np.ndarray, int]:
@@ -91,7 +86,7 @@ def _match_chord(profile: np.ndarray) -> str:
     return f"{best[0]} {best[1]}"
 
 
-def chords_and_tuning(path: Path) -> tuple[list[str], float]:
+def chords_and_tuning(path: Path) -> tuple[list[str], float | None]:
     """Chord labels across the track, and the tuning it was mastered at.
 
     Chroma comes from a constant-Q transform, which resolves pitch better than an STFT at the low
@@ -103,7 +98,7 @@ def chords_and_tuning(path: Path) -> tuple[list[str], float]:
     audio, sr = _mono(path)
     chroma = librosa.feature.chroma_cqt(y=audio, sr=sr, hop_length=2048)
     if chroma.shape[1] == 0:
-        return [], 440.0
+        return [], None
 
     step = max(1, chroma.shape[1] // MAX_CHORD_LABELS)
     labels: list[str] = []
@@ -114,9 +109,11 @@ def chords_and_tuning(path: Path) -> tuple[list[str], float]:
             break
 
     try:
-        tuning_hz = float(np.atleast_1d(librosa.estimate_tuning(audio, sr=sr))[0])
-    except Exception:
-        tuning_hz = 440.0
+        # librosa returns fractions of a semitone, not hertz. Its audio argument is keyword-only.
+        offset = float(librosa.estimate_tuning(y=audio, sr=sr))
+        tuning_hz = 440.0 * 2.0 ** (offset / 12.0) if np.isfinite(offset) else None
+    except (ValueError, RuntimeError):
+        tuning_hz = None
     return labels, tuning_hz
 
 
@@ -129,27 +126,27 @@ def rhythm_and_tone(path: Path) -> dict[str, float | str]:
     mono = samples.mean(axis=1)
     onset_env = librosa.onset.onset_strength(y=mono, sr=sr)
 
-    # Four-to-the-floor means a strong onset near every beat. Comparing onsets against the beat
-    # lattice beats counting them, because a breakbeat has plenty of onsets too -- they are just not
-    # on the grid.
+    # This is only an onset/beat proximity measurement. It does not classify four-on-the-floor,
+    # syncopation, or whether two tracks sound good together.
     tempo = float(np.atleast_1d(
         librosa.feature.tempo(onset_envelope=onset_env, sr=sr, aggregate=np.median)
     )[0])
     beats = np.asarray(
         librosa.beat.beat_track(onset_envelope=onset_env, sr=sr, units="time")[1], dtype=float
     )
-    on_grid = off_grid = 0
+    on_grid = 0
+    total = 0
     if beats.size > 4 and tempo > 0:
-        tolerance = 0.5 * 60.0 / tempo
+        # Half a beat classifies almost every onset as on-grid. A tenth of a beat measures
+        # whether the transient is actually near a detected beat rather than merely nearby.
+        tolerance = 0.1 * 60.0 / tempo
         peaks = librosa.onset.onset_detect(y=mono, sr=sr, units="time", backtrack=False)
         for peak in peaks:
             nearest = float(np.min(np.abs(beats - peak)))
             if nearest <= tolerance:
                 on_grid += 1
-            elif nearest > 2 * tolerance:
-                off_grid += 1
-    total = on_grid + off_grid
-    fraction = on_grid / total if total else 0.0
+            total += 1
+    fraction = on_grid / total if total else None
 
     contrast = librosa.feature.spectral_contrast(y=mono, sr=sr).mean(axis=1)
     low, high = float(contrast[1]), float(contrast[-2])
@@ -157,18 +154,18 @@ def rhythm_and_tone(path: Path) -> dict[str, float | str]:
     window = mono[: min(mono.size, sr * 20)]
     spectrum = np.abs(np.fft.rfft(window))
     freqs = np.fft.rfftfreq(window.size, d=1.0 / sr)
-    total_energy = float(spectrum.sum()) or 1.0
-    # Named for what is measured, which is onset-grid alignment -- *not* "four on the floor".
-    # Brushed jazz and a house kick are both steady on the grid; calling both "four_on_floor"
-    # would teach the selector a distinction that does not exist in the measurement.
+    power = np.square(spectrum)
+    total_energy = float(power.sum()) or 1.0
+    # Preserve the numerical measurement without turning an arbitrary threshold into a genre tag.
     return {
-        "rhythm": "steady_grid" if fraction > 0.6 else "syncopated_or_sparse",
-        "onset_grid_alignment": round(fraction, 3),
-        "on_grid_onset_fraction": round(fraction, 3),
+        "rhythm": "unclassified" if fraction is not None else "unknown",
+        "onset_grid_alignment": round(fraction, 3) if fraction is not None else None,
+        "on_grid_onset_fraction": round(fraction, 3) if fraction is not None else None,
+        "detected_onsets": total,
         "low_high_ratio": round(low / (high + 1e-9), 3),
-        "sub_bass_fraction": round(float(spectrum[freqs < 120].sum()) / total_energy, 4),
+        "sub_bass_fraction": round(float(power[freqs < 120].sum()) / total_energy, 4),
         "presence_fraction": round(
-            float(spectrum[(freqs >= 1000) & (freqs < 6000)].sum()) / total_energy, 4
+            float(power[(freqs >= 1000) & (freqs < 6000)].sum()) / total_energy, 4
         ),
     }
 
@@ -187,12 +184,22 @@ def extract(path: Path) -> dict:
     features = rhythm_and_tone(path)
     progression = _collapse(labels)
     features.update(
+        extractor_version=EXTRACTOR_VERSION,
+        source_sha256=_sha256(path),
         chords=progression,
         chord_count=len(progression),
         distinct_chords=sorted(set(progression) - {"unknown"}),
-        tuning_hz=round(tuning_hz, 2),
+        tuning_hz=round(tuning_hz, 2) if tuning_hz is not None else None,
     )
     return features
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as audio:
+        for block in iter(lambda: audio.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def main() -> int:

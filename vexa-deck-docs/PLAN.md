@@ -17,8 +17,8 @@ These come from the project owner and are treated as settled.
 
 | # | Decision | Consequence |
 |---|---|---|
-| D1 | `character-sheets/vexa-pixel-portrait.png` is the repository README icon and the application icon | Canonical brand asset; derived sizes generated from it. Character turnaround sheets are **reference art only**, not shipped sprites |
-| D2 | Character sheets become the animated on-program hero; animation is a later pass | The GUI reserves a character stage; no sprite sheet is produced until the animation design pass |
+| D1 | Character artwork, sheets, Blender rigs, animations and portrait icons are removed | No character assets are shipped or loaded |
+| D2 | Keep the center of the GUI as an empty bordered box | Playback and generation appear in the surrounding controls; no character animation |
 | D3 | The LLM integration is **OpenAI-compatible**, not vendor-pinned | Any `/v1/chat/completions` endpoint works. The planner can be pointed at OpenAI, a local llama.cpp/vLLM server, LM Studio, or any compatible gateway with a config change. See §5.3 |
 | D4 | Model inference runs **locally on this host**, never in Docker | Preserves GPU passthrough, avoids CUDA-in-container friction, keeps weights on local disk. See §4 |
 | D5 | Services run in **Docker containers** | Orchestrator, planner, library/index, analyzer, and job queue are containerized for reproducible dependencies and clean restarts |
@@ -611,7 +611,7 @@ Not oversights. From `PRODUCT.md:56-61` and `IDEAS.md:53-57`.
 | `DATASETS.md` | **Verified** dataset status, licences and what each one can and cannot teach. Supersedes `LAYA_DATA.md` where they disagree |
 | `FINETUNE-DECISION.md` | **What we train on, in what order, and what we refuse to train on.** Authoritative for the plan |
 | `FINETUNE.md` | The fine-tune runbook: measured facts, bugs found, promotion gates |
-| `VISUAL_DIRECTION.md` | Pixel-art GUI and Vexa character brief. Authoritative for *look* |
+| `VISUAL_DIRECTION.md` | Dark ASCII cyberpunk GUI and local video modes. Authoritative for *look* |
 | `IDEAS.md` | Optional experiments. Authoritative for *what comes after the core* |
 
 ---

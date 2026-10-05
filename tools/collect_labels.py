@@ -86,14 +86,72 @@ def _session_id(index: int, theme: str) -> str:
     return f"collect-{index}-{digest}"
 
 
+def _stratified_order(manifests: dict[str, object]) -> list[str]:
+    """Asset ids ordered so early indices span tempo and mood rather than one palette.
+
+    Assets are bucketed by (tempo decade, mood) and dealt round-robin, so consecutive indices land
+    in different regions of the library. Deterministic, so every annotator who asks for index *n*
+    is shown the same decision -- which is what makes their answers comparable at all.
+    """
+    buckets: dict[tuple[int, str], list[str]] = {}
+    for asset_id, manifest in manifests.items():
+        bpm = manifest.beat_grid.bpm if manifest.beat_grid else 0.0
+        mood = "?"
+        for entry in manifest.tags.get("mood", []):
+            mood = entry.value
+            break
+        buckets.setdefault((int(bpm // 20), mood), []).append(asset_id)
+
+    for members in buckets.values():
+        members.sort()
+    order: list[str] = []
+    keys = sorted(buckets)
+    depth = max((len(v) for v in buckets.values()), default=0)
+    for step in range(depth):
+        for key in keys:
+            if step < len(buckets[key]):
+                order.append(buckets[key][step])
+    return order
+
+
+def _has_transitions(manifests: dict[str, object], asset_id: str) -> bool:
+    """Whether this deck can offer anything other than "continue"."""
+    from vexa_contracts import SessionState
+
+    asset = manifests[asset_id]
+    state = SessionState(session_id="probe", theme="probe")
+    menu = FeasibilityFilter().build(
+        state=state, library=list(manifests.values()), current_asset=asset
+    )
+    return bool(menu.transitions)
+
+
 def build_decision(
     manifests: dict[str, object], *, index: int, theme: str
 ) -> tuple[DecisionContext, list, object] | None:
-    """One decision point: a session state, the feasible options, and the current track."""
+    """One decision point: a session state, the feasible options, and the current track.
+
+    The deck is chosen by **stratified round-robin**, not alphabetically. The library is 200 depot
+    renders whose names start with their tempo palette, so ``sorted(ids)[0:20]`` was three originals
+    plus seventeen tracks from the single ``depot-100`` palette. An annotator working through that
+    would have labelled the same prompt seventeen times and called it judgement.
+    """
     if not manifests:
         return None
-    ids = sorted(manifests)
-    current_id = ids[index % len(ids)]
+    order = _stratified_order(manifests)
+    # Advance to the first deck that can actually offer a transition. The slowest and fastest
+    # tracks are outliers by construction -- at 61 BPM almost nothing in the library sits inside a
+    # 10 % tempo ratio -- and a menu of nothing but "continue" teaches a selector that holding is
+    # the only move. Deterministic given the same library, so annotators still agree on which
+    # decision index *n* refers to.
+    current_id = None
+    for step in range(len(order)):
+        candidate = order[(index + step) % len(order)]
+        if _has_transitions(manifests, candidate):
+            current_id = candidate
+            break
+    if current_id is None:
+        return None
 
     from vexa_contracts import SessionState
 

@@ -1,44 +1,78 @@
-# Python
+# Python / tooling
 __pycache__/
 *.py[cod]
-.venv/
 *.egg-info/
+.venv/
+venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Local runtime state (never commit user sessions or logs)
-var/
+# Local sessions, generated music, reports, logs and application preferences
+/var/
+/runtime/
+/output/
+/runs/
+/assets/generated/
+/assets/library/
+/assets/audio/
+/data/sessions/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
-runtime/
+*.log
 
-# Docker
+# User-uploaded videos (created by the installer; never distributed)
+/vexa-videos/
 
-# Fine-tuning runs and checkpoints. Weights are separate artifacts under their own licence
-# (YuE2 CC BY-NC 4.0), so they must never be committed.
-runs/
+# Model downloads, checkpoints and tensor caches; weights have separate terms
+/models/
+/weights/
+/checkpoints/
 *.safetensors
 *.gguf
+*.ggml
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.h5
+*.hdf5
+*.bin
+*.npy
+*.npz
+*.partial
+*.part
 
-# Audio + model artifacts. Source, weights, audio and datasets stay separate
-# downloads governed by their own terms. See ROADMAP.md "Risks to test early".
-assets/generated/
-assets/library/
-assets/audio/
-models/
-weights/
-data/sessions/
+# Release archives, native builds and package staging
+/dist/
+/build/
+*.AppImage
+*.deb
+*.rpm
+*.whl
+*.tar.gz
+*.tar.xz
+*.zip
+.vexa-install.json
 
-# Keys
+# Local third-party inference source/builds; retain video renderer attribution
+/third_party/*
+!/third_party/video-art/
+
+# Credentials and machine-local settings
 .env
 .env.*
 !.env.example
+/.aws/
+/.codex/
+/.agents/
 
-# OS
+# Editors / OS
+.idea/
+.vscode/
 .DS_Store
 Thumbs.db
-
-# Vendored third-party builds. yue2.cpp is cloned and compiled locally and carries 4.3 GB
-# of model weights under their own licence, so it is never committed. See BACKEND.md.
-third_party/

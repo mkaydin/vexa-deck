@@ -14,9 +14,10 @@ callback.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -37,9 +38,11 @@ class EngineConfig:
 
     sample_rate: int = 44100
     channels: int = 2
-    #: Frames per callback. Larger absorbs more jitter at the cost of latency; 512 is 11.6 ms at
-    #: 44.1 kHz, which is a reasonable desktop starting point.
-    blocksize: int = 512
+    #: 46 ms radio blocks absorb desktop scheduling jitter during generation.
+    blocksize: int = field(
+        default_factory=lambda: int(os.environ.get("VEXA_AUDIO_BLOCKSIZE", "2048"))
+    )
+    latency: str | float = "high"
     device: int | str | None = None
     #: Pre-roll so the callback is never the first thing to touch the device.
     warmup_callbacks: int = 8
@@ -71,6 +74,7 @@ class AudioEngine:
             channels=self.config.channels,
             queue=self.queue,
             clock=self.clock,
+            max_block=max(1024, self.config.blocksize),
         )
         self.cache = TrackCache(sample_rate=self.config.sample_rate)
         self._stream = None
@@ -96,26 +100,34 @@ class AudioEngine:
                 return
 
             def callback(outdata, frames, _time, _status):
-                # A status flag here would report an underrun. Counting it is enough; logging
-                # from a callback is not allowed.
+                if _status.output_underflow:
+                    self.mixer.stats.output_underflows += 1
+                    self.mixer.stats.underruns += 1
                 self.mixer.render(outdata, frames)
 
             # `OutputStream`, not `RawOutputStream`: RawOutputStream hands the callback a raw
             # buffer object, and wrapping it in an array per block would allocate on the
             # realtime path. OutputStream supplies a numpy array directly, so the mixer can
             # work on the output in place.
-            self._stream = sd.OutputStream(
+            # Warm the mixer before PortAudio can enter it, avoiding concurrent rendering.
+            for _ in range(self.config.warmup_callbacks):
+                self._render_silence()
+            stream = sd.OutputStream(
                 samplerate=self.config.sample_rate,
                 channels=self.config.channels,
                 blocksize=self.config.blocksize,
                 dtype="float32",
                 device=self.config.device,
+                latency=self.config.latency,
                 callback=callback,
             )
-            self._stream.start()
+            try:
+                stream.start()
+            except Exception:
+                stream.close()
+                raise
+            self._stream = stream
             self.mixer.start()
-            for _ in range(self.config.warmup_callbacks):
-                self._render_silence()
 
     def _render_silence(self) -> None:
         """Pre-roll so the first real block does not land on a cold device."""
@@ -138,18 +150,25 @@ class AudioEngine:
 
     # -- loading (never on the audio thread) --------------------------------
 
-    def preload(self, path: str | Path, *, bpm: float | None = None,
-                expected_hash: str | None = None) -> PreloadedTrack:
+    def preload(
+        self, path: str | Path, *, bpm: float | None = None, expected_hash: str | None = None
+    ) -> PreloadedTrack:
         """Decode a file into memory. Safe to call from any thread."""
         return self.cache.preload(path, bpm=bpm, expected_hash=expected_hash)
 
-    def preload_async(self, path: str | Path, *, bpm: float | None = None,
-                      on_done: Callable[[PreloadedTrack | None], None] | None = None) -> None:
+    def preload_async(
+        self,
+        path: str | Path,
+        *,
+        bpm: float | None = None,
+        on_done: Callable[[PreloadedTrack | None], None] | None = None,
+    ) -> None:
         """Preload on a background thread.
 
         The point is that a control thread can ask for a track without waiting for a decode, so a
         long file never delays a scheduler decision.
         """
+
         def worker() -> None:
             try:
                 track = self.preload(path, bpm=bpm)
@@ -199,27 +218,51 @@ class AudioEngine:
         """Hard stop for both decks. Reachable at all times, even when everything else is busy."""
         self.queue.put(Command(CommandKind.EMERGENCY_STOP))
 
-    def load_and_play(self, track: PreloadedTrack, deck: int = 0, *, fade_frames: int = 0) -> None:
+    def load_and_play(
+        self, track: PreloadedTrack, deck: int = 0, *, fade_frames: int = 0, entry_frame: int = 0
+    ) -> None:
         """Install a preloaded track and start it.
 
-        The track swap happens here, on the control thread, as a single attribute store. The
-        callback only receives the playback intent.
+        PCM and playback intent arrive in one command and are applied at a block boundary.
         """
-        self.mixer.set_track(deck, track)
-        self.queue.put(Command(CommandKind.LOAD_TRACK, deck=deck, value=1.0))
+        self.cache.put(track)
+        self.queue.put(
+            Command(
+                CommandKind.LOAD_TRACK, deck=deck, value=1.0, value2=float(entry_frame), track=track
+            )
+        )
         if fade_frames > 0:
             self.queue.put(
                 Command(CommandKind.START_CROSSFADE, deck=deck, value2=float(fade_frames))
             )
 
-    def crossfade_to(self, track: PreloadedTrack, deck: int = 1, *, fade_frames: int) -> None:
+    def prepare_deck(self, track: PreloadedTrack, deck: int, *, entry_frame: int = 0) -> None:
+        """Install the next track on a silent deck before its crossfade begins."""
+        self.cache.put(track)
+        self.queue.put(
+            Command(
+                CommandKind.LOAD_TRACK, deck=deck, value=0.0, value2=float(entry_frame), track=track
+            )
+        )
+
+    def crossfade_to(
+        self, track: PreloadedTrack, deck: int = 1, *, fade_frames: int, entry_frame: int = 0
+    ) -> None:
         """Fade the incoming deck up and the other one down.
 
         Both decks keep playing through the overlap, which is what makes it a crossfade rather
         than a cut.
         """
-        self.mixer.set_track(deck, track)
-        self.queue.put(Command(CommandKind.START_CROSSFADE, deck=deck, value2=float(fade_frames)))
+        self.cache.put(track)
+        self.queue.put(
+            Command(
+                CommandKind.START_CROSSFADE,
+                deck=deck,
+                value=float(entry_frame),
+                value2=float(fade_frames),
+                track=track,
+            )
+        )
 
     # -- introspection ------------------------------------------------------
 
@@ -235,7 +278,7 @@ class AudioEngine:
                 name = info["name"]
                 # Prefer what PortAudio reports over blocksize/rate, which is only nominal.
                 latency = float(self._stream.latency or 0.0) or float(
-                    info["default_low_input_latency"] or 0.0
+                    info["default_high_output_latency"] or 0.0
                 )
             except Exception:  # status must never raise
                 name = ""
@@ -253,4 +296,11 @@ class AudioEngine:
         )
 
     def snapshot(self) -> dict[str, object]:
-        return self.mixer.snapshot()
+        snapshot = self.mixer.snapshot()
+        snapshot["equalizer"] = self.mixer.equalizer.snapshot()
+        snapshot["device"] = {
+            "blocksize": self.config.blocksize,
+            "latency_s": float(self._stream.latency) if self._stream else 0.0,
+            "cpu_load": float(self._stream.cpu_load) if self._stream else 0.0,
+        }
+        return snapshot
