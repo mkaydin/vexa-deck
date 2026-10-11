@@ -48,6 +48,7 @@ core = [
     "numpy>=1.26",
     "soundfile>=0.12",
     "librosa>=0.10",
+    "scipy>=1.13",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
 ]
@@ -55,6 +56,12 @@ core = [
 desktop = ["PySide6==6.11.2"]
 # Music-specific text planning; loaded only inside the offline planner worker.
 local-planner = [
+    "torch>=2.14",
+    "transformers>=5.18",
+    "huggingface-hub>=1.0",
+]
+# Optional CPU-only audio/text observations; no weights are packaged.
+audio-observers = [
     "torch>=2.14",
     "transformers>=5.18",
     "huggingface-hub>=1.0",

@@ -1,0 +1,68 @@
+diff --git a/src/pipeline.cpp b/src/pipeline.cpp
+index b154d63..eec09c2 100644
+--- a/src/pipeline.cpp
++++ b/src/pipeline.cpp
+@@ -386,6 +386,7 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
+                 cond_ids.size());
+         max_frames = kv_budget;
+     }
++    int min_frames = std::max(0, std::min(max_frames, (int) (req.min_duration * FRAME_RATE)));
+ 
+     // Current per-stream state in KV set order: rows [cond 0..N-1,
+     // uncond N..2N-1], seeded from the shared prefill
+@@ -420,6 +421,13 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
+             return PIPELINE_CANCELLED;
+         }
+ 
++        // Vexa: sample real continuation frames rather than padding short songs.
++        // Frame zero feeds back into the LM; it does not produce audio hiddens.
++        allowed.resize(MM3_SEMANTIC_VOCAB);
++        if (frame_index > min_frames) {
++            allowed.push_back(MM3_AUDIO_END);
++        }
++
+         bool all_done = true;
+         for (int i = 0; i < N; i++) {
+             sampled[i] = mm3_cfg_sample(cur_logits.data() + (size_t) i * V, cur_logits.data() + (size_t) (N + i) * V,
+diff --git a/src/request.cpp b/src/request.cpp
+index 056d065..a391341 100644
+--- a/src/request.cpp
++++ b/src/request.cpp
+@@ -19,6 +19,7 @@ void request_init(MM3Request * r) {
+     r->lyrics  = "";
+ 
+     r->duration = 60.0f;
++    r->min_duration = 0.0f;
+     r->steps    = 30;
+     r->seed     = -1;
+     r->lm_seed  = -1;
+@@ -78,6 +79,9 @@ static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
+     if ((v = yyjson_obj_get(obj, "duration")) && yyjson_is_num(v)) {
+         r->duration = (float) yyjson_get_num(v);
+     }
++    if ((v = yyjson_obj_get(obj, "min_duration")) && yyjson_is_num(v)) {
++        r->min_duration = (float) yyjson_get_num(v);
++    }
+     if ((v = yyjson_obj_get(obj, "steps")) && yyjson_is_int(v)) {
+         r->steps = (int) yyjson_get_sint(v);
+     }
+@@ -190,6 +194,7 @@ std::string request_to_json(const MM3Request * r, bool sparse) {
+     put_str("caption", r->caption, def.caption);
+     put_str("lyrics", r->lyrics, def.lyrics);
+     put_f("duration", r->duration, def.duration);
++    put_f("min_duration", r->min_duration, def.min_duration);
+     put_i("steps", r->steps, def.steps);
+     put_i("seed", r->seed, def.seed);
+     put_i("lm_seed", r->lm_seed, def.lm_seed);
+diff --git a/src/request.h b/src/request.h
+index 2c0bbf5..d5550ec 100644
+--- a/src/request.h
++++ b/src/request.h
+@@ -15,6 +15,7 @@ struct MM3Request {
+ 
+     // generation
+     float   duration;  // 60.0, seconds, capped by the 9000 frame LM budget
++    float   min_duration; // Vexa: suppress end tokens until this duration (default 0).
+     int     steps;     // 30, Euler steps per DiT window
+     int64_t seed;      // -1 = random. DiT Philox noise consumes the low
+                        // 32 bits. Stored in int64_t to land positive

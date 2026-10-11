@@ -25,10 +25,10 @@ def registry() -> dict[str, type[BaseModel]]:
     """
     global _CACHE
     if _CACHE is None:
-        from . import asset, decision, jobs, requests, session
+        from . import asset, decision, jobs, music, requests, session
 
         found: dict[str, type[BaseModel]] = {}
-        for module in (asset, session, decision, requests, jobs):
+        for module in (asset, session, decision, requests, jobs, music):
             for name in dir(module):
                 obj = getattr(module, name)
                 if not isinstance(obj, type) or not issubclass(obj, BaseModel):

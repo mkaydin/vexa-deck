@@ -416,6 +416,7 @@
           "description": "Where an asset came from. ``ARCHITECTURE.md:44``.",
           "enum": [
             "yue2_render",
+            "generated_render",
             "revised_render",
             "user_import",
             "stem_separation",
@@ -683,6 +684,47 @@
         }
       },
       "title": "Contract",
+      "type": "object"
+    },
+    "CreativeDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "instruments": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "title": "Instruments",
+          "type": "array"
+        },
+        "production_notes": {
+          "maxLength": 1800,
+          "minLength": 30,
+          "title": "Production Notes",
+          "type": "string"
+        },
+        "section_descriptions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Section Descriptions",
+          "type": "object"
+        },
+        "title": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "production_notes",
+        "instruments",
+        "section_descriptions"
+      ],
+      "title": "CreativeDraft",
       "type": "object"
     },
     "DecisionRequest": {
@@ -1704,6 +1746,217 @@
       "title": "GenerationResult",
       "type": "object"
     },
+    "GenerationSettings": {
+      "additionalProperties": false,
+      "description": "Validated preferences for future batches; hints are not measured audio facts.",
+      "properties": {
+        "bpm": {
+          "anyOf": [
+            {
+              "maximum": 220,
+              "minimum": 40,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bpm"
+        },
+        "buffer_tracks": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Buffer Tracks",
+          "type": "integer"
+        },
+        "custom_lyrics": {
+          "default": "",
+          "maxLength": 5000,
+          "title": "Custom Lyrics",
+          "type": "string"
+        },
+        "duration_s": {
+          "anyOf": [
+            {
+              "maximum": 180,
+              "minimum": 150,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration S"
+        },
+        "energy": {
+          "default": 0.55,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Energy",
+          "type": "number"
+        },
+        "energy_arc": {
+          "default": "dj",
+          "enum": [
+            "dj",
+            "steady",
+            "build",
+            "wind_down"
+          ],
+          "title": "Energy Arc",
+          "type": "string"
+        },
+        "exclude_instruments": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Exclude Instruments",
+          "type": "array"
+        },
+        "genre": {
+          "default": "",
+          "maxLength": 100,
+          "title": "Genre",
+          "type": "string"
+        },
+        "groove": {
+          "default": "",
+          "maxLength": 180,
+          "title": "Groove",
+          "type": "string"
+        },
+        "include_instruments": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Include Instruments",
+          "type": "array"
+        },
+        "language": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "en",
+            "tr",
+            "zh",
+            "ja",
+            "ko",
+            "es",
+            "fr",
+            "de"
+          ],
+          "title": "Language",
+          "type": "string"
+        },
+        "lyric_direction": {
+          "default": "",
+          "maxLength": 400,
+          "title": "Lyric Direction",
+          "type": "string"
+        },
+        "lyric_topic": {
+          "default": "",
+          "maxLength": 400,
+          "title": "Lyric Topic",
+          "type": "string"
+        },
+        "plan_attempts": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Plan Attempts",
+          "type": "integer"
+        },
+        "planning_timeout_s": {
+          "default": 600,
+          "maximum": 1800,
+          "minimum": 60,
+          "title": "Planning Timeout S",
+          "type": "integer"
+        },
+        "render_attempts": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Render Attempts",
+          "type": "integer"
+        },
+        "render_speed": {
+          "default": "balanced",
+          "enum": [
+            "fast",
+            "balanced",
+            "quality"
+          ],
+          "title": "Render Speed",
+          "type": "string"
+        },
+        "rendering_timeout_s": {
+          "default": 6000,
+          "maximum": 14400,
+          "minimum": 600,
+          "title": "Rendering Timeout S",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 42,
+          "maximum": 2147483000,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "start_policy": {
+          "default": "depot",
+          "enum": [
+            "depot",
+            "buffer",
+            "complete"
+          ],
+          "title": "Start Policy",
+          "type": "string"
+        },
+        "tempo_policy": {
+          "default": "hint",
+          "enum": [
+            "hint",
+            "strict"
+          ],
+          "title": "Tempo Policy",
+          "type": "string"
+        },
+        "texture": {
+          "default": "",
+          "maxLength": 180,
+          "title": "Texture",
+          "type": "string"
+        },
+        "track_count": {
+          "default": 10,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Track Count",
+          "type": "integer"
+        },
+        "vocal_mode": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "instrumental",
+            "singing",
+            "rap"
+          ],
+          "title": "Vocal Mode",
+          "type": "string"
+        }
+      },
+      "title": "GenerationSettings",
+      "type": "object"
+    },
     "KeyEstimate": {
       "additionalProperties": false,
       "description": "Musical key plus its confidence. Used for the harmonic compatibility filter.",
@@ -1753,6 +2006,26 @@
       "title": "LoopPoints",
       "type": "object"
     },
+    "LyricsDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "sections": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Sections",
+          "type": "object"
+        }
+      },
+      "required": [
+        "sections"
+      ],
+      "title": "LyricsDraft",
+      "type": "object"
+    },
     "MusicalClock": {
       "additionalProperties": false,
       "description": "Position within the set, in musical time.",
@@ -1785,6 +2058,43 @@
         }
       },
       "title": "MusicalClock",
+      "type": "object"
+    },
+    "PlannedSection": {
+      "additionalProperties": false,
+      "properties": {
+        "bars": {
+          "exclusiveMinimum": 0,
+          "title": "Bars",
+          "type": "integer"
+        },
+        "end_s": {
+          "exclusiveMinimum": 0,
+          "title": "End S",
+          "type": "number"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "section_id": {
+          "title": "Section Id",
+          "type": "string"
+        },
+        "start_s": {
+          "minimum": 0,
+          "title": "Start S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "section_id",
+        "name",
+        "bars",
+        "start_s",
+        "end_s"
+      ],
+      "title": "PlannedSection",
       "type": "object"
     },
     "Provenance": {
@@ -2483,6 +2793,664 @@
         "theme"
       ],
       "title": "SessionState",
+      "type": "object"
+    },
+    "ThemeSpec": {
+      "$defs": {
+        "GenerationSettings": {
+          "additionalProperties": false,
+          "description": "Validated preferences for future batches; hints are not measured audio facts.",
+          "properties": {
+            "bpm": {
+              "anyOf": [
+                {
+                  "maximum": 220,
+                  "minimum": 40,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bpm"
+            },
+            "buffer_tracks": {
+              "default": 2,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Buffer Tracks",
+              "type": "integer"
+            },
+            "custom_lyrics": {
+              "default": "",
+              "maxLength": 5000,
+              "title": "Custom Lyrics",
+              "type": "string"
+            },
+            "duration_s": {
+              "anyOf": [
+                {
+                  "maximum": 180,
+                  "minimum": 150,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration S"
+            },
+            "energy": {
+              "default": 0.55,
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Energy",
+              "type": "number"
+            },
+            "energy_arc": {
+              "default": "dj",
+              "enum": [
+                "dj",
+                "steady",
+                "build",
+                "wind_down"
+              ],
+              "title": "Energy Arc",
+              "type": "string"
+            },
+            "exclude_instruments": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 12,
+              "title": "Exclude Instruments",
+              "type": "array"
+            },
+            "genre": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Genre",
+              "type": "string"
+            },
+            "groove": {
+              "default": "",
+              "maxLength": 180,
+              "title": "Groove",
+              "type": "string"
+            },
+            "include_instruments": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 12,
+              "title": "Include Instruments",
+              "type": "array"
+            },
+            "language": {
+              "default": "auto",
+              "enum": [
+                "auto",
+                "en",
+                "tr",
+                "zh",
+                "ja",
+                "ko",
+                "es",
+                "fr",
+                "de"
+              ],
+              "title": "Language",
+              "type": "string"
+            },
+            "lyric_direction": {
+              "default": "",
+              "maxLength": 400,
+              "title": "Lyric Direction",
+              "type": "string"
+            },
+            "lyric_topic": {
+              "default": "",
+              "maxLength": 400,
+              "title": "Lyric Topic",
+              "type": "string"
+            },
+            "plan_attempts": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Plan Attempts",
+              "type": "integer"
+            },
+            "planning_timeout_s": {
+              "default": 600,
+              "maximum": 1800,
+              "minimum": 60,
+              "title": "Planning Timeout S",
+              "type": "integer"
+            },
+            "render_attempts": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Render Attempts",
+              "type": "integer"
+            },
+            "render_speed": {
+              "default": "balanced",
+              "enum": [
+                "fast",
+                "balanced",
+                "quality"
+              ],
+              "title": "Render Speed",
+              "type": "string"
+            },
+            "rendering_timeout_s": {
+              "default": 6000,
+              "maximum": 14400,
+              "minimum": 600,
+              "title": "Rendering Timeout S",
+              "type": "integer"
+            },
+            "seed": {
+              "default": 42,
+              "maximum": 2147483000,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer"
+            },
+            "start_policy": {
+              "default": "depot",
+              "enum": [
+                "depot",
+                "buffer",
+                "complete"
+              ],
+              "title": "Start Policy",
+              "type": "string"
+            },
+            "tempo_policy": {
+              "default": "hint",
+              "enum": [
+                "hint",
+                "strict"
+              ],
+              "title": "Tempo Policy",
+              "type": "string"
+            },
+            "texture": {
+              "default": "",
+              "maxLength": 180,
+              "title": "Texture",
+              "type": "string"
+            },
+            "track_count": {
+              "default": 10,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Track Count",
+              "type": "integer"
+            },
+            "vocal_mode": {
+              "default": "auto",
+              "enum": [
+                "auto",
+                "instrumental",
+                "singing",
+                "rap"
+              ],
+              "title": "Vocal Mode",
+              "type": "string"
+            }
+          },
+          "title": "GenerationSettings",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "bpm": {
+          "maximum": 220,
+          "minimum": 40,
+          "title": "Bpm",
+          "type": "number"
+        },
+        "bpm_explicit": {
+          "default": false,
+          "title": "Bpm Explicit",
+          "type": "boolean"
+        },
+        "genre": {
+          "minLength": 1,
+          "title": "Genre",
+          "type": "string"
+        },
+        "language": {
+          "title": "Language",
+          "type": "string"
+        },
+        "palette": {
+          "title": "Palette",
+          "type": "string"
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenerationSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "theme": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Theme",
+          "type": "string"
+        },
+        "vocal_mode": {
+          "enum": [
+            "instrumental",
+            "singing",
+            "rap"
+          ],
+          "title": "Vocal Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "theme",
+        "genre",
+        "palette",
+        "vocal_mode",
+        "language",
+        "bpm"
+      ],
+      "title": "ThemeSpec",
+      "type": "object"
+    },
+    "TrackPlan": {
+      "$defs": {
+        "GenerationSettings": {
+          "additionalProperties": false,
+          "description": "Validated preferences for future batches; hints are not measured audio facts.",
+          "properties": {
+            "bpm": {
+              "anyOf": [
+                {
+                  "maximum": 220,
+                  "minimum": 40,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bpm"
+            },
+            "buffer_tracks": {
+              "default": 2,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Buffer Tracks",
+              "type": "integer"
+            },
+            "custom_lyrics": {
+              "default": "",
+              "maxLength": 5000,
+              "title": "Custom Lyrics",
+              "type": "string"
+            },
+            "duration_s": {
+              "anyOf": [
+                {
+                  "maximum": 180,
+                  "minimum": 150,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration S"
+            },
+            "energy": {
+              "default": 0.55,
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Energy",
+              "type": "number"
+            },
+            "energy_arc": {
+              "default": "dj",
+              "enum": [
+                "dj",
+                "steady",
+                "build",
+                "wind_down"
+              ],
+              "title": "Energy Arc",
+              "type": "string"
+            },
+            "exclude_instruments": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 12,
+              "title": "Exclude Instruments",
+              "type": "array"
+            },
+            "genre": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Genre",
+              "type": "string"
+            },
+            "groove": {
+              "default": "",
+              "maxLength": 180,
+              "title": "Groove",
+              "type": "string"
+            },
+            "include_instruments": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 12,
+              "title": "Include Instruments",
+              "type": "array"
+            },
+            "language": {
+              "default": "auto",
+              "enum": [
+                "auto",
+                "en",
+                "tr",
+                "zh",
+                "ja",
+                "ko",
+                "es",
+                "fr",
+                "de"
+              ],
+              "title": "Language",
+              "type": "string"
+            },
+            "lyric_direction": {
+              "default": "",
+              "maxLength": 400,
+              "title": "Lyric Direction",
+              "type": "string"
+            },
+            "lyric_topic": {
+              "default": "",
+              "maxLength": 400,
+              "title": "Lyric Topic",
+              "type": "string"
+            },
+            "plan_attempts": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Plan Attempts",
+              "type": "integer"
+            },
+            "planning_timeout_s": {
+              "default": 600,
+              "maximum": 1800,
+              "minimum": 60,
+              "title": "Planning Timeout S",
+              "type": "integer"
+            },
+            "render_attempts": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Render Attempts",
+              "type": "integer"
+            },
+            "render_speed": {
+              "default": "balanced",
+              "enum": [
+                "fast",
+                "balanced",
+                "quality"
+              ],
+              "title": "Render Speed",
+              "type": "string"
+            },
+            "rendering_timeout_s": {
+              "default": 6000,
+              "maximum": 14400,
+              "minimum": 600,
+              "title": "Rendering Timeout S",
+              "type": "integer"
+            },
+            "seed": {
+              "default": 42,
+              "maximum": 2147483000,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer"
+            },
+            "start_policy": {
+              "default": "depot",
+              "enum": [
+                "depot",
+                "buffer",
+                "complete"
+              ],
+              "title": "Start Policy",
+              "type": "string"
+            },
+            "tempo_policy": {
+              "default": "hint",
+              "enum": [
+                "hint",
+                "strict"
+              ],
+              "title": "Tempo Policy",
+              "type": "string"
+            },
+            "texture": {
+              "default": "",
+              "maxLength": 180,
+              "title": "Texture",
+              "type": "string"
+            },
+            "track_count": {
+              "default": 10,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Track Count",
+              "type": "integer"
+            },
+            "vocal_mode": {
+              "default": "auto",
+              "enum": [
+                "auto",
+                "instrumental",
+                "singing",
+                "rap"
+              ],
+              "title": "Vocal Mode",
+              "type": "string"
+            }
+          },
+          "title": "GenerationSettings",
+          "type": "object"
+        },
+        "PlannedSection": {
+          "additionalProperties": false,
+          "properties": {
+            "bars": {
+              "exclusiveMinimum": 0,
+              "title": "Bars",
+              "type": "integer"
+            },
+            "end_s": {
+              "exclusiveMinimum": 0,
+              "title": "End S",
+              "type": "number"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "section_id": {
+              "title": "Section Id",
+              "type": "string"
+            },
+            "start_s": {
+              "minimum": 0,
+              "title": "Start S",
+              "type": "number"
+            }
+          },
+          "required": [
+            "section_id",
+            "name",
+            "bars",
+            "start_s",
+            "end_s"
+          ],
+          "title": "PlannedSection",
+          "type": "object"
+        },
+        "ThemeSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "bpm": {
+              "maximum": 220,
+              "minimum": 40,
+              "title": "Bpm",
+              "type": "number"
+            },
+            "bpm_explicit": {
+              "default": false,
+              "title": "Bpm Explicit",
+              "type": "boolean"
+            },
+            "genre": {
+              "minLength": 1,
+              "title": "Genre",
+              "type": "string"
+            },
+            "language": {
+              "title": "Language",
+              "type": "string"
+            },
+            "palette": {
+              "title": "Palette",
+              "type": "string"
+            },
+            "preferences": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GenerationSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "theme": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Theme",
+              "type": "string"
+            },
+            "vocal_mode": {
+              "enum": [
+                "instrumental",
+                "singing",
+                "rap"
+              ],
+              "title": "Vocal Mode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "theme",
+            "genre",
+            "palette",
+            "vocal_mode",
+            "language",
+            "bpm"
+          ],
+          "title": "ThemeSpec",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "duration_s": {
+          "maximum": 180,
+          "minimum": 150,
+          "title": "Duration S",
+          "type": "number"
+        },
+        "energy": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Energy",
+          "type": "number"
+        },
+        "generator": {
+          "enum": [
+            "yue2",
+            "acestep",
+            "minimax"
+          ],
+          "title": "Generator",
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/$defs/ThemeSpec"
+        },
+        "pipeline_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Pipeline Version",
+          "type": "integer"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/PlannedSection"
+          },
+          "maxItems": 16,
+          "minItems": 2,
+          "title": "Sections",
+          "type": "array"
+        },
+        "slot": {
+          "maximum": 9,
+          "minimum": 0,
+          "title": "Slot",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slot",
+        "generator",
+        "intent",
+        "duration_s",
+        "energy",
+        "role",
+        "sections"
+      ],
+      "title": "TrackPlan",
       "type": "object"
     },
     "UserRequest": {

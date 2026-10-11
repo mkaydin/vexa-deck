@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import threading
@@ -17,12 +18,13 @@ from pathlib import Path
 import httpx
 import soundfile as sf
 from vexa_audio.cues import analyse_cues
-from vexa_contracts import ApprovalState, Estimate, Provenance
+from vexa_contracts import ApprovalState, Estimate, Provenance, SourceType
 from vexa_yue2.backends import BackendUnavailable
 from vexa_yue2.gates import analyse
 from vexa_yue2.master import master
 from vexa_yue2.runtime import native_environment
 
+from .audio_evidence import EvidenceSession
 from .depot import DepotAsset
 from .music_plan import lyric_lines, validate_lyric_theme
 from .track_titles import clean_title, fallback_title, unique_title
@@ -48,6 +50,12 @@ ROLES = (
 DEFAULT_PROMPT_MODEL = "nemotron-3-super:cloud"
 
 
+class PromptResponseError(ValueError):
+    def __init__(self, message: str, response_text: str):
+        super().__init__(message)
+        self.response_text = response_text
+
+
 def _llm_connection() -> tuple[str, str, str, str]:
     base = os.environ.get("VEXA_LLM_BASE_URL", "").rstrip("/")
     model = os.environ.get("VEXA_LLM_MODEL", "").strip() or DEFAULT_PROMPT_MODEL
@@ -69,6 +77,14 @@ def _ollama_prompts(
     messages: list[dict[str, str]],
     count: int,
     cancel: threading.Event | None,
+    *,
+    structured: bool = False,
+    schema: dict | None = None,
+    options: dict | None = None,
+    metrics: dict | None = None,
+    keep_alive: int | None = None,
+    thinking: bool | None = False,
+    schema_supported: bool | None = None,
 ) -> str:
     """Cloud models use requested JSON text; schema format is only supported locally."""
     request = {
@@ -79,7 +95,17 @@ def _ollama_prompts(
         "think": False,
         "options": {"temperature": 0.3, "num_predict": 20000, "num_ctx": 32768},
     }
-    if not model.endswith(":cloud"):
+    if structured:
+        request["options"]["num_predict"] = min(20000, 5000 * count)
+    if options:
+        request["options"].update(options)
+    if keep_alive is not None:
+        request["keep_alive"] = keep_alive
+    if thinking is None:
+        request.pop("think")
+    else:
+        request["think"] = thinking
+    if schema_supported if schema_supported is not None else not model.endswith(":cloud"):
         request["format"] = {
             "type": "object",
             "properties": {
@@ -96,9 +122,20 @@ def _ollama_prompts(
             },
             "required": ["tracks"],
         }
+        if structured:
+            item = request["format"]["properties"]["tracks"]["items"]
+            item["properties"].update(
+                {"structured_caption": {"type": "string"}, "title": {"type": "string"}}
+            )
+            item["required"].append("structured_caption")
+        if schema is not None:
+            request["format"] = schema
     chunks: list[str] = []
     text_chars = 0
     progress_at = time.monotonic()
+    started = progress_at
+    first_token_at = None
+    finished = False
     with httpx.stream(
         "POST", f"{base}/api/chat", timeout=httpx.Timeout(300.0, read=120.0), json=request
     ) as response:
@@ -111,15 +148,42 @@ def _ollama_prompts(
                 if body.get("error"):
                     raise RuntimeError(f"Ollama: {body['error']}")
                 chunk = body.get("message", {}).get("content", "")
+                if chunk and first_token_at is None:
+                    first_token_at = time.monotonic() - started
                 chunks.append(chunk)
                 text_chars += len(chunk)
+                if structured and text_chars > 24000 * count:
+                    raise PromptResponseError(
+                        "prompt response exceeded the structured track size limit", "".join(chunks)
+                    )
                 if time.monotonic() - progress_at > 15:
                     progress_at = time.monotonic()
                     LOGGER.info("Prompt writer progress model=%s text_chars=%d", model, text_chars)
                 if body.get("done"):
+                    finished = True
+                    if metrics is not None:
+                        metrics.update(
+                            {
+                                key: body.get(key)
+                                for key in (
+                                    "prompt_eval_count",
+                                    "eval_count",
+                                    "total_duration",
+                                    "load_duration",
+                                    "prompt_eval_duration",
+                                    "eval_duration",
+                                    "done_reason",
+                                )
+                            }
+                        )
+                        metrics.update(wall_s=time.monotonic() - started, ttft_s=first_token_at)
                     if body.get("done_reason") == "length":
-                        raise ValueError("prompt response was truncated")
+                        raise PromptResponseError("prompt response was truncated", "".join(chunks))
                     break
+    if metrics is not None and not finished:
+        raise PromptResponseError(
+            "prompt stream ended without a completion marker", "".join(chunks)
+        )
     return "".join(chunks)
 
 
@@ -140,6 +204,14 @@ def _theme_profile(theme: str) -> tuple[str, str, bool]:
     intent = vocal_intent(theme)
     instrumental = intent is False
     if re.search(r"\bphonk\b", lowered):
+        if re.search(r"\bmemphis\b", lowered):
+            return (
+                "Memphis phonk",
+                "pitched-down haunted minor-key piano and soul-sample chops, sparse swung "
+                "Southern drum-machine beats, dry snares, deep rounded 808 bass, "
+                "dusty sampler grit, low-pass filtering and warm cassette saturation",
+                intent is True,
+            )
         genre = "JDM drift phonk" if re.search(r"\bjdm\b|\bdrift\b", lowered) else "phonk"
         return (
             genre,
@@ -171,7 +243,15 @@ def _theme_profile(theme: str) -> tuple[str, str, bool]:
     return theme.strip(), "a genre-authentic rhythm section and era-appropriate instruments", vocal
 
 
-def _parse_track_plan(raw: str, theme: str, count: int, model: str) -> list[TrackBrief]:
+def _parse_track_plan(
+    raw: str,
+    theme: str,
+    count: int,
+    model: str,
+    *,
+    generator: str = "yue2",
+    track_index: int | None = None,
+) -> list[TrackBrief]:
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
@@ -185,6 +265,7 @@ def _parse_track_plan(raw: str, theme: str, count: int, model: str) -> list[Trac
     seen = set()
     seen_titles = set()
     for index, row in enumerate(tracks):
+        position = track_index if track_index is not None else index
         if not isinstance(row, (dict, str)):
             raise ValueError(f"track {index + 1}: expected a production brief object")
         style = row if isinstance(row, str) else row.get("style", "")
@@ -193,12 +274,21 @@ def _parse_track_plan(raw: str, theme: str, count: int, model: str) -> list[Trac
             raise ValueError(f"track {index + 1}: invalid style length")
         if not isinstance(lyrics, str) or len(lyrics) > 5000:
             raise ValueError(f"track {index + 1}: invalid lyrics")
+        if generator == "minimax":
+            from .minimax_prompts import normalize_lyrics
+
+            lyrics = normalize_lyrics(lyrics)
         lowered = style.lower()
         if lowered in seen:
             raise ValueError("duplicate track prompts")
         seen.add(lowered)
         if "phonk" in genre.lower() and not re.search(r"\bphonk\b", lowered):
             raise ValueError(f"track {index + 1}: missing requested phonk genre")
+        if genre == "Memphis phonk":
+            if "memphis" not in lowered:
+                raise ValueError(f"track {index + 1}: missing requested Memphis phonk subgenre")
+            if re.search(r"\bdrift[ -]+phonk\b|\bjdm\b|phonk\s+house|four.on.the.floor", lowered):
+                raise ValueError(f"track {index + 1}: Memphis phonk prompt switched subgenre")
         if rap:
             if not re.search(r"\brap\b|hip[ -]?hop|boom[ -]?bap", lowered):
                 raise ValueError(f"track {index + 1}: missing requested hip hop / rap genre")
@@ -233,12 +323,55 @@ def _parse_track_plan(raw: str, theme: str, count: int, model: str) -> list[Trac
         )
         # The immutable theme/genre leads the conditioning, before track-specific details.
         style = f"{genre}. Listener theme: {theme.strip()}. {voice} {style.strip()}"
+        musical_plan = None
+        if generator == "minimax":
+            from .minimax_prompts import FORMAT, retime_caption, validate_caption
+            from .music_plan import arrangement, tempo_hint
+
+            original_caption = row.get("structured_caption") if isinstance(row, dict) else None
+            if not isinstance(original_caption, str):
+                raise ValueError("MiniMax plan needs structured_caption text")
+            timed_caption, retimed = retime_caption(original_caption, TRACK_DURATIONS[position])
+            caption = validate_caption(
+                timed_caption,
+                style=style,
+                lyrics=lyrics,
+                genre=genre,
+                vocal=vocal,
+                duration_s=TRACK_DURATIONS[position],
+            )
+            if retimed:
+                LOGGER.info(
+                    "MiniMax caption timeline repaired track=%d target_s=%s; "
+                    "original caption retained in music_plan",
+                    position + 1,
+                    TRACK_DURATIONS[position],
+                )
+            bpm = tempo_hint(theme, genre)
+            musical_plan = {
+                "minimax_caption": caption,
+                "caption_format": FORMAT,
+                "caption_origin": f"llm:{model}",
+                "genre": genre,
+                "bpm": bpm,
+                "measured": False,
+                "requested_duration_s": TRACK_DURATIONS[position],
+                "caption_retimed": retimed,
+                "original_minimax_caption": original_caption if retimed else None,
+                "sections": arrangement(TRACK_DURATIONS[position], bpm, vocal=vocal, rap=rap),
+            }
         briefs.append(
             TrackBrief(
-                style, TRACK_DURATIONS[index], ENERGY_ARC[index], f"llm:{model}", lyrics.strip(),
+                style,
+                TRACK_DURATIONS[position],
+                ENERGY_ARC[position],
+                f"llm:{model}",
+                lyrics.strip(),
+                music_plan=musical_plan,
                 title=unique_title(
                     (clean_title(row.get("title")) if isinstance(row, dict) else "")
-                    or fallback_title(theme, style, str(index)), seen_titles
+                    or fallback_title(theme, style, str(index)),
+                    seen_titles,
                 ),
             )
         )
@@ -285,10 +418,14 @@ def _repair_instrumental_plan(
                 )
             style = f"{genre}. {details}"
         if removed or lyrics.strip():
-            tracks[index] = {**(row if isinstance(row, dict) else {}),
-                             "style": style, "lyrics": ""}
-            repairs.append({"track": index + 1, "removed_sentences": removed,
-                            "cleared_lyrics": bool(lyrics.strip())})
+            tracks[index] = {**(row if isinstance(row, dict) else {}), "style": style, "lyrics": ""}
+            repairs.append(
+                {
+                    "track": index + 1,
+                    "removed_sentences": removed,
+                    "cleared_lyrics": bool(lyrics.strip()),
+                }
+            )
     return json.dumps(body, ensure_ascii=False) if repairs else raw, repairs
 
 
@@ -296,8 +433,14 @@ def _record_prompt_attempt(theme: str, model: str, raw: str, **details) -> Path:
     """Keep the exact failed/repaired response so a generic error can be diagnosed."""
     path = ROOT / "var/plans/raw" / f"writer-{time.time_ns()}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"theme": theme, "model": model, "response": raw, **details},
-                               indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            {"theme": theme, "model": model, "response": raw, **details},
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -307,6 +450,7 @@ def _plan_remote_theme(
     count: int = TRACK_COUNT,
     cancel: threading.Event | None = None,
     track_index: int | None = None,
+    generator: str = "yue2",
 ) -> list[TrackBrief]:
     """Preserve genre, era and vocal intent; validate and repair a ten-track production plan."""
     if not theme.strip() or not 1 <= count <= TRACK_COUNT:
@@ -362,20 +506,26 @@ def _plan_remote_theme(
     )
     if "phonk" in genre.lower() and not vocal:
         constraints += (
-            " This is instrumental phonk: perform rhythmic hooks with cowbells, synths "
+            " This is instrumental Memphis phonk: use haunted pitched-down sample-like "
+            "instrument motifs, sparse swung drum-machine beats, rounded 808 bass and "
+            "cassette texture. Keep a slow head-nodding pocket and loop-driven arrangement. "
+            "Use positive style tags describing this palette. "
+            if genre == "Memphis phonk"
+            else " This is instrumental phonk: perform rhythmic hooks with cowbells, synths "
             "and percussion. Replace Memphis rap samples and vocal chops with instrumental "
             "riffs. Describe only the instruments that will actually play."
         )
     story = (
         "For vocal tracks, choose a concrete setting, narrator and conflict, "
         "and a story that develops across verses; avoid interchangeable party/love slogans. "
-        if vocal else
-        "For instrumental tracks, express the theme through timbre, groove, harmony and "
+        if vocal
+        else "For instrumental tracks, express the theme through timbre, groove, harmony and "
         "evolving motifs. Describe instrumental sections only; no singer, MC, spoken words, "
         "humming or vocal samples. Keep lyrics empty. "
     )
     system = (
-        f"You are Vexa's music producer. Write exactly {count} distinct YuE2 production briefs. "
+        f"You are Vexa's music producer. Write exactly {count} distinct "
+        f"{'MiniMax Music 3.0' if generator == 'minimax' else 'YuE2'} production briefs. "
         "The listener's genre, era, language and vocal request take priority over energy arc. "
         f"Genre anchor: {genre}. Instrument palette: {palette}. {constraints} {voice} "
         "Tracks run 165-180 seconds. Each style is 45-100 words, starting with genre and era, "
@@ -412,15 +562,36 @@ def _plan_remote_theme(
                 f"narrator details and a story focusing on {focus} within the listener's theme. "
                 "Count actual lyric lines: stage directions and headings DO NOT count. "
                 "Write all refrain lines explicitly, never '(repeat chorus)'."
-                if vocal else
-                "bass pattern, instrumental phrasing and evolving arrangement. "
+                if vocal
+                else "bass pattern, instrumental phrasing and evolving arrangement. "
                 "Do not write lyrics, vocal delivery or verse/refrain directions."
             )
         )
     messages = [{"role": "system", "content": system}, {"role": "user", "content": theme.strip()}]
+    if generator == "minimax":
+        from .minimax_prompts import timeline_outline, writer_instructions
+        from .music_plan import tempo_hint
+
+        messages[0]["content"] = (
+            system.replace(
+                '"lyrics":"original lyrics or empty"}',
+                '"lyrics":"original lyrics or empty","structured_caption":"full caption"}',
+            )
+            + writer_instructions()
+        )
+        positions = [track_index] if track_index is not None else range(count)
+        for position in positions:
+            target = TRACK_DURATIONS[position]
+            messages[0]["content"] += (
+                f" Track {position + 1} target length {int(target) // 60}:"
+                f"{round(target) % 60:02} ({target:g} seconds). "
+                "Use these section time anchors and section names for the caption and lyrics: "
+                + timeline_outline(target, tempo_hint(theme, genre), vocal=vocal, rap=rap)
+                + ". "
+            )
     failure = ""
     raw = ""
-    for attempt in range(2):
+    for attempt in range(3 if generator == "minimax" else 2):
         if cancel is not None and cancel.is_set():
             raise RuntimeError("prompt writing cancelled")
         if attempt:
@@ -433,25 +604,42 @@ def _plan_remote_theme(
             )
         try:
             if provider == "ollama":
-                raw = _ollama_prompts(base, model, messages, count, cancel)
+                raw = _ollama_prompts(
+                    base,
+                    model,
+                    messages,
+                    count,
+                    cancel,
+                    **({"structured": True} if generator == "minimax" else {}),
+                )
             else:
                 response = httpx.post(
                     f"{base}/chat/completions",
                     timeout=180,
                     headers={"Authorization": f"Bearer {key}"} if key else {},
-                    json={"model": model, "max_completion_tokens": 12000, "messages": messages},
+                    json={
+                        "model": model,
+                        "max_completion_tokens": 24000 if generator == "minimax" else 12000,
+                        "messages": messages,
+                    },
                 )
                 response.raise_for_status()
                 raw = response.json()["choices"][0]["message"]["content"]
             if not vocal:
                 repaired, repairs = _repair_instrumental_plan(raw, theme, count, track_index)
                 if repairs:
-                    report = _record_prompt_attempt(theme, model, raw, repairs=repairs,
-                                                    repaired_response=repaired)
-                    LOGGER.info("Prompt plan repaired instrumental tracks=%d report=%s",
-                                len(repairs), report)
+                    report = _record_prompt_attempt(
+                        theme, model, raw, repairs=repairs, repaired_response=repaired
+                    )
+                    LOGGER.info(
+                        "Prompt plan repaired instrumental tracks=%d report=%s",
+                        len(repairs),
+                        report,
+                    )
                     raw = repaired
-            briefs = _parse_track_plan(raw, theme, count, model)
+            briefs = _parse_track_plan(
+                raw, theme, count, model, generator=generator, track_index=track_index
+            )
             LOGGER.info(
                 "Prompt plan accepted model=%s genre=%s vocals=%s tracks=%d",
                 model,
@@ -462,10 +650,15 @@ def _plan_remote_theme(
             return briefs
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             failure = str(exc)
+            if isinstance(exc, PromptResponseError):
+                raw = exc.response_text
             report = _record_prompt_attempt(theme, model, raw, failure=failure, attempt=attempt + 1)
             LOGGER.warning(
                 "Prompt plan rejected attempt=%d model=%s reason=%s report=%s",
-                attempt + 1, model, failure, report,
+                attempt + 1,
+                model,
+                failure,
+                report,
             )
         except (httpx.HTTPError, RuntimeError) as exc:
             raise RuntimeError(f"prompt model {model} failed: {exc}") from exc
@@ -473,21 +666,29 @@ def _plan_remote_theme(
 
 
 def plan_theme(
-    theme: str, *, count: int = TRACK_COUNT, cancel: threading.Event | None = None
+    theme: str,
+    *,
+    count: int = TRACK_COUNT,
+    cancel: threading.Event | None = None,
+    generator: str = "yue2",
 ) -> list[TrackBrief]:
     """Finish the local text plan in a child process before any YuE2 rendering."""
     if not theme.strip() or not 1 <= count <= TRACK_COUNT:
         raise ValueError("theme and a count from 1 to 10 are required")
     planner = os.environ.get("VEXA_MUSIC_PLANNER", "acestep").strip().lower()
     if os.environ.get("VEXA_LLM_PROVIDER") == "none" or planner == "ollama":
-        return _plan_remote_theme(theme, count=count, cancel=cancel)
+        return _plan_remote_theme(theme, count=count, cancel=cancel, generator=generator)
     if planner != "acestep":
         raise ValueError(f"unknown VEXA_MUSIC_PLANNER: {planner}")
     from .background import run_job
 
     result = run_job(
         "plan",
-        {"theme": theme, "count": count},
+        {
+            "theme": theme,
+            "count": count,
+            **({"generator": generator} if generator == "minimax" else {}),
+        },
         cancel=cancel,
         timeout_s=float(os.environ.get("VEXA_ACE_TIMEOUT_S", "1800")),
     )
@@ -512,7 +713,9 @@ def plan_theme(
 
 def _gpu_index() -> str:
     """Return a stable GPU UUID; CUDA and nvidia-smi index orders differ here."""
-    configured = os.environ.get("VEXA_YUE_GPU", "").strip()
+    configured = (
+        os.environ.get("VEXA_GENERATION_GPU") or os.environ.get("VEXA_YUE_GPU", "")
+    ).strip()
     if configured.startswith("GPU-"):
         return configured
     try:
@@ -538,7 +741,7 @@ def _gpu_index() -> str:
                 return uuid
     except (OSError, subprocess.TimeoutExpired):
         pass
-    raise RuntimeError("RTX 5060 Ti was not found; YuE2 generation cannot start")
+    raise RuntimeError("RTX 5060 Ti was not found; music generation cannot start")
 
 
 def style_from_theme(theme: str) -> str:
@@ -558,21 +761,39 @@ def generate_theme(
     lyrics: str = "",
     music_plan: dict | None = None,
     title: str = "",
+    generator: str | None = None,
+    preset: str | None = None,
+    render_id: str | None = None,
+    seed: int | None = None,
+    render_timeout_s: int | None = None,
 ) -> DepotAsset:
-    """Run the host yue-synth executable and admit only a gated, cueable result."""
+    """Render through the selected backend and admit only a gated, cueable result."""
+    from .generators import native_revision, render_alternative, selection
+
+    generator, preset = selection(generator, preset)
+    seed = secrets.randbelow(2**31) if seed is None else seed
+    if type(seed) is not int or not 0 <= seed < 2**31:
+        raise ValueError("render seed must be a nonnegative 31-bit integer")
+    render_metadata = {"generator": generator, "preset": preset, "seed": seed}
     backend = ROOT / "third_party/yue2.cpp"
     binary = Path(os.environ.get("VEXA_YUE_BINARY", backend / "build/yue-synth"))
     model = Path(os.environ.get("VEXA_YUE_MODEL", backend / "models/YuE2-3B-Q8_0.gguf"))
     vae = Path(os.environ.get("VEXA_YUE_VAE", backend / "models/YuE2-Vae-F32.gguf"))
-    for path in (binary, model, vae):
-        if not path.exists():
-            raise BackendUnavailable(f"YuE2 component missing: {path}")
+    if generator == "yue2":
+        render_metadata["runtime_revision"] = native_revision(binary)
+        for path in (binary, model, vae):
+            if not path.exists():
+                raise BackendUnavailable(f"YuE2 component missing: {path}")
     library.mkdir(parents=True, exist_ok=True)
-    asset_id = f"live-{uuid.uuid4().hex[:12]}"
+    if render_id is not None and not re.fullmatch(r"live-[a-f0-9]{12}", render_id):
+        raise ValueError("invalid reserved render ID")
+    asset_id = render_id or f"live-{uuid.uuid4().hex[:12]}"
     wav = library / f"{asset_id}.wav"
+    if any(path.exists() for path in (wav, wav.with_suffix(".raw.wav"), wav.with_suffix(".json"))):
+        raise ValueError("reserved render ID already exists; refusing to overwrite audio")
     request = library / f"{asset_id}.request.json"
     if style is None:
-        brief = plan_theme(theme, count=1, cancel=cancel)[0]
+        brief = plan_theme(theme, count=1, cancel=cancel, generator=generator)[0]
         style = brief.style
         lyrics = lyrics or brief.lyrics
         music_plan = music_plan or brief.music_plan
@@ -582,171 +803,323 @@ def generate_theme(
             raise ValueError("instrumental generation requires empty lyrics")
         if has_vocal_delivery(style):
             raise ValueError("instrumental generation style contains vocal delivery")
-    # YuE2's default semantic minimum is only 200 frames (eight seconds). A duration
-    # request otherwise caps generation without preventing an early end token.
-    frames = round(duration_s * 25)
-    request.write_text(
-        json.dumps(
-            {
-                "style": style,
-                "lyrics": lyrics,
-                "cot": "off",
-                "cfg_scale": 1.2,
-                "seed": -1,
-                "duration": duration_s,
-                "semantic_sampling": {
-                    "min_tokens": max(200, frames - 25),
-                    "max_tokens": frames,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    cmd = [
-        str(binary),
-        "--model",
-        str(model),
-        "--vae",
-        str(vae),
-        "--request",
-        str(request),
-        "--out",
-        str(wav),
-        "--duration",
-        str(duration_s),
-        "--steps",
-        "32",
-        "--max-seq",
-        "8192",
-    ]
-    log = wav.with_suffix(".render.log")
-    try:
-        gpu = _gpu_index()
-    except RuntimeError as exc:
-        raise BackendUnavailable(str(exc)) from exc
-    # GPU kernels retain full access to the selected GPU. CPU helpers must leave room
-    # for the playback callback, including BLAS/OpenMP pools inherited from the launcher.
-    render_env = {
-        **native_environment(binary),
-        "CUDA_VISIBLE_DEVICES": gpu,
-        "OMP_NUM_THREADS": "1",
-        "MKL_NUM_THREADS": "1",
-        "OPENBLAS_NUM_THREADS": "1",
-        "NUMBA_NUM_THREADS": "1",
-    }
-    if shutil.which("nice"):
-        cmd = ["nice", "-n", "10", *cmd]
-    with log.open("w", encoding="utf-8") as output:
-        LOGGER.info(
-            "YuE2 render start asset=%s duration=%.1fs gpu=%s prompt_origin=%s log=%s",
-            asset_id,
-            duration_s,
-            gpu,
-            prompt_origin,
-            log,
+    if generator != "yue2":
+        render_metadata = render_alternative(
+            generator,
+            preset,
+            wav,
+            request,
+            style=style,
+            lyrics=lyrics,
+            duration_s=duration_s,
+            music_plan=music_plan,
+            cancel=cancel,
+            seed=seed,
+            timeout_s=render_timeout_s,
         )
+    else:
+        # YuE2's default semantic minimum is only 200 frames (eight seconds). A duration
+        # request otherwise caps generation without preventing an early end token.
+        frames = round(duration_s * 25)
+        request.write_text(
+            json.dumps(
+                {
+                    "style": style,
+                    "lyrics": lyrics,
+                    "cot": "off",
+                    "cfg_scale": 1.2,
+                    "seed": seed,
+                    "duration": duration_s,
+                    "semantic_sampling": {
+                        "min_tokens": max(200, frames - 25),
+                        "max_tokens": frames,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        cmd = [
+            str(binary),
+            "--model",
+            str(model),
+            "--vae",
+            str(vae),
+            "--request",
+            str(request),
+            "--out",
+            str(wav),
+            "--duration",
+            str(duration_s),
+            "--steps",
+            "32",
+            "--max-seq",
+            "8192",
+        ]
+        log = wav.with_suffix(".render.log")
         try:
-            process = subprocess.Popen(cmd, stdout=output, stderr=subprocess.STDOUT, env=render_env)
-        except OSError as exc:
-            raise BackendUnavailable(f"YuE2 could not launch: {exc}") from exc
-        deadline = time.monotonic() + max(900.0, duration_s * 15.0)
-        try:
-            while process.poll() is None:
-                if (cancel is not None and cancel.wait(0.25)) or time.monotonic() > deadline:
+            gpu = _gpu_index()
+        except RuntimeError as exc:
+            raise BackendUnavailable(str(exc)) from exc
+        # GPU kernels retain full access to the selected GPU. CPU helpers must leave room
+        # for the playback callback, including BLAS/OpenMP pools inherited from the launcher.
+        render_env = {
+            **native_environment(binary),
+            "CUDA_VISIBLE_DEVICES": gpu,
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "NUMBA_NUM_THREADS": "1",
+        }
+        if shutil.which("nice"):
+            cmd = ["nice", "-n", "10", *cmd]
+        with log.open("w", encoding="utf-8") as output:
+            LOGGER.info(
+                "YuE2 render start asset=%s duration=%.1fs gpu=%s prompt_origin=%s log=%s",
+                asset_id,
+                duration_s,
+                gpu,
+                prompt_origin,
+                log,
+            )
+            try:
+                process = subprocess.Popen(
+                    cmd, stdout=output, stderr=subprocess.STDOUT, env=render_env
+                )
+            except OSError as exc:
+                raise BackendUnavailable(f"YuE2 could not launch: {exc}") from exc
+            deadline = time.monotonic() + (render_timeout_s or max(900.0, duration_s * 15.0))
+            try:
+                while process.poll() is None:
+                    if (cancel is not None and cancel.wait(0.25)) or time.monotonic() > deadline:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                        raise RuntimeError("YuE2 render cancelled or timed out")
+                    if cancel is None:
+                        time.sleep(0.25)
+            except BaseException:
+                if process.poll() is None:
                     process.terminate()
                     try:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait()
-                    raise RuntimeError("YuE2 render cancelled or timed out")
-                if cancel is None:
-                    time.sleep(0.25)
-        except BaseException:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-            raise
-    if process.returncode != 0:
-        detail = log.read_text()[-1000:].strip()
-        error = f"YuE2 exited {process.returncode}: {detail}"
-        if process.returncode in (126, 127) or "error while loading shared libraries" in detail:
-            raise BackendUnavailable(error)
-        raise RuntimeError(error)
-    if cancel is not None and cancel.is_set():
-        raise RuntimeError("YuE2 render cancelled")
-    master(wav)
-    if cancel is not None and cancel.is_set():
-        raise RuntimeError("YuE2 render cancelled")
-    rendered_duration = sf.info(str(wav)).duration
-    LOGGER.info(
-        "YuE2 render completed asset=%s requested=%.1fs actual=%.1fs",
-        asset_id,
-        duration_s,
-        rendered_duration,
-    )
-    if not duration_s - 2.0 <= rendered_duration <= duration_s + 2.0:
-        raise ValueError(f"YuE2 rendered {rendered_duration:.1f}s; requested {duration_s:.1f}s")
-    result = analyse(
+                raise
+        if process.returncode != 0:
+            detail = log.read_text()[-1000:].strip()
+            error = f"YuE2 exited {process.returncode}: {detail}"
+            if process.returncode in (126, 127) or "error while loading shared libraries" in detail:
+                raise BackendUnavailable(error)
+            raise RuntimeError(error)
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("YuE2 render cancelled")
+    return admit_render(
         wav,
-        asset_id=asset_id,
-        family_id=f"family_{asset_id}",
-        approval=ApprovalState.APPROVED,
-        provenance=Provenance(source_prompt=style),
+        theme=theme,
+        duration_s=duration_s,
+        energy=energy,
+        cancel=cancel,
+        style=style,
+        lyrics=lyrics,
+        music_plan=music_plan,
+        title=title,
+        generator=generator,
+        preset=preset,
+        seed=seed,
+        prompt_origin=prompt_origin,
+        render_metadata=render_metadata,
     )
-    if not result.admitted or result.manifest is None:
-        raise ValueError(
-            f"generated audio failed quality gates: {result.fatal or result.quality.flags}"
-        )
-    manifest = result.manifest
-    manifest.title = clean_title(title) or fallback_title(theme, style, asset_id)
-    manifest.tags = {
-        "energy": [Estimate(value=f"{energy:.2f}", confidence=0.6)],
-        "mood": [Estimate(value=theme[:80], confidence=1.0)],
-        "instrumental": [Estimate(value="false" if lyrics else "true", confidence=0.8)],
-    }
-    cue = analyse_cues(wav, expected_bpm=manifest.beat_grid.bpm)
-    cue.save(wav.with_suffix(".cues.json"))
-    if cue.entry_s is None or cue.exit_s is None:
-        last_beat = cue.beat_times_s[-1] if cue.beat_times_s else None
-        raise ValueError(
-            "generated audio passed gates but has no reliable transition cues; "
-            f"beat confidence={cue.beat_confidence}, last beat={last_beat}s, "
-            f"duration={rendered_duration:.1f}s"
-        )
-    LOGGER.info(
-        "YuE2 admitted asset=%s entry=%.2fs exit=%.2fs bpm=%.2f",
-        asset_id,
-        cue.entry_s,
-        cue.exit_s,
-        manifest.beat_grid.bpm,
+
+
+def admit_render(
+    wav: Path,
+    *,
+    theme: str,
+    duration_s: float,
+    energy: float,
+    cancel=None,
+    style: str = "",
+    lyrics: str = "",
+    music_plan: dict | None = None,
+    title: str = "",
+    generator: str = "yue2",
+    preset: str = "q8",
+    seed: int = 42,
+    prompt_origin: str = "audit",
+    render_metadata: dict | None = None,
+) -> DepotAsset:
+    """Inspect/repair/admit a reserved render. Shared by generation and offline audits."""
+    render_metadata = render_metadata or {}
+    asset_id = wav.stem
+    preferences = (music_plan or {}).get("generation_settings") or {}
+    plan_intent = ((music_plan or {}).get("track_plan") or {}).get("intent") or {}
+    evidence = EvidenceSession(
+        wav,
+        duration_s=duration_s,
+        requested={
+            **plan_intent,
+            "energy_target": energy,
+            "include_instruments": preferences.get("include_instruments", []),
+            "exclude_instruments": preferences.get("exclude_instruments", []),
+        },
     )
-    wav.with_suffix(".brief.json").write_text(
-        json.dumps(
-            {
-                "title": manifest.title,
-                "theme": theme,
-                "style": style,
-                "lyrics": lyrics,
-                "prompt_origin": prompt_origin,
-                "music_plan": music_plan,
-                "requested_duration_s": duration_s,
-                "rendered_duration_s": rendered_duration,
-                "energy": energy,
+    try:
+        evidence.begin()
+        master_report = master(wav)
+        evidence.mastered(master_report)
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("YuE2 render cancelled")
+        rendered_duration = sf.info(str(wav)).duration
+        LOGGER.info(
+            "Music render completed asset=%s requested=%.1fs actual=%.1fs",
+            asset_id,
+            duration_s,
+            rendered_duration,
+        )
+        if not duration_s - 2.0 <= rendered_duration <= duration_s + 2.0:
+            raise ValueError(
+                f"Music generator rendered {rendered_duration:.1f}s; requested {duration_s:.1f}s"
+            )
+        result = analyse(
+            wav,
+            asset_id=asset_id,
+            family_id=f"family_{asset_id}",
+            source_type=SourceType.YUE2_RENDER
+            if generator == "yue2"
+            else SourceType.GENERATED_RENDER,
+            approval=ApprovalState.APPROVED,
+            provenance=Provenance(source_prompt=style, seed=seed),
+        )
+        if not result.admitted or result.manifest is None:
+            if result.manifest is not None:
+                evidence.body["quality"] = result.manifest.quality.model_dump()
+                quality = result.manifest.quality
+                evidence.body["admission"]["playable"] = bool(
+                    quality.decode_ok
+                    and quality.duration_ok
+                    and quality.loudness_ok
+                    and quality.audio_quality_ok
+                )
+                evidence.body["admission"]["capabilities"]["full_track_playback"] = evidence.body[
+                    "admission"
+                ]["playable"]
+            evidence.reject(
+                ["quality_gate_failed"], detail=str(result.fatal or result.quality.flags)
+            )
+        manifest = result.manifest
+        manifest.title = clean_title(title) or fallback_title(theme, style, asset_id)
+        manifest.tags = {
+            "generator": [Estimate(value=generator, confidence=1.0)],
+            "generator_preset": [Estimate(value=preset, confidence=1.0)],
+            "intent_energy": [Estimate(value=f"{energy:.2f}", confidence=1.0)],
+            "intent_mood": [Estimate(value=theme[:80], confidence=1.0)],
+            "intent_instrumental": [Estimate(value="false" if lyrics else "true", confidence=1.0)],
+        }
+        evidence.body["quality"] = manifest.quality.model_dump()
+        evidence.body["admission"]["playable"] = True
+        evidence.body["admission"]["capabilities"]["full_track_playback"] = True
+        cue = analyse_cues(wav, expected_bpm=manifest.beat_grid.bpm)
+        cue.save(wav.with_suffix(".cues.json"))
+        if cue.entry_s is None or cue.exit_s is None:
+            last_beat = cue.beat_times_s[-1] if cue.beat_times_s else None
+            evidence.reject(
+                ["transition_cues_unreliable"],
+                detail=(
+                    "generated audio passed gates but has no reliable transition cues; "
+                    f"beat confidence={cue.beat_confidence}, last beat={last_beat}s, "
+                    f"duration={rendered_duration:.1f}s"
+                ),
+            )
+        target_bpm = (music_plan or {}).get("bpm")
+        if preferences.get("tempo_policy") == "strict" and target_bpm:
+            measured_bpm = manifest.beat_grid.bpm
+            error = min(abs(measured_bpm * factor - target_bpm) for factor in (0.5, 1, 2))
+            if error > 3:
+                evidence.reject(
+                    ["strict_tempo_mismatch"],
+                    detail=(
+                        f"measured tempo {measured_bpm:.1f} BPM differs from strict "
+                        f"target {target_bpm:g} BPM (tolerance 3 BPM)"
+                    ),
+                )
+        from .semantic_audio import observe
+
+        observations = observe(wav, evidence.body["requested"], cancel=cancel)
+        evidence.body["observations"] = observations
+        if cancel is not None and cancel.is_set():
+            evidence.body["status"] = "cancelled"
+            evidence.save()
+            raise RuntimeError("audio analysis cancelled")
+        evidence.body["timing"] = {
+            "bpm": manifest.beat_grid.bpm,
+            "beat_confidence": manifest.beat_grid.confidence,
+            "key": manifest.key.model_dump() if manifest.key else None,
+            "entry_s": cue.entry_s,
+            "exit_s": cue.exit_s,
+        }
+        evidence.body["admission"].update(
+            mixable=True,
+            technical_constraints_satisfied=True,
+            constraints_satisfied=None,
+            capabilities={
+                "full_track_playback": True,
+                "beat_synchronized_mix": True,
+                "stem_mix": False,
+                "verified_vocal_safe_overlap": False,
             },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    wav.with_suffix(".json").write_text(
-        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8"
-    )
-    return DepotAsset(manifest, wav, frozenset(theme.lower().split()), {})
+            warnings=[
+                "Genre, vocal activity and language are uncalibrated or unavailable; "
+                "observation policy."
+            ],
+        )
+        evidence.body["status"] = "admitted"
+        evidence.save()
+        LOGGER.info(
+            "Music admitted asset=%s entry=%.2fs exit=%.2fs bpm=%.2f",
+            asset_id,
+            cue.entry_s,
+            cue.exit_s,
+            manifest.beat_grid.bpm,
+        )
+        wav.with_suffix(".brief.json").write_text(
+            json.dumps(
+                {
+                    **render_metadata,
+                    "title": manifest.title,
+                    "theme": theme,
+                    "style": style,
+                    "lyrics": lyrics,
+                    "prompt_origin": prompt_origin,
+                    "music_plan": music_plan,
+                    "requested_duration_s": duration_s,
+                    "rendered_duration_s": rendered_duration,
+                    "energy": energy,
+                    "audio_evidence_version": evidence.body["evidence_version"],
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        published = wav.with_suffix(".json.tmp")
+        published.write_text(
+            json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8"
+        )
+        published.replace(wav.with_suffix(".json"))
+        return DepotAsset(manifest, wav, frozenset(theme.lower().split()), {})
+    except Exception as exc:
+        if evidence.body["status"] not in {"rejected", "cancelled"}:
+            evidence.body["status"] = (
+                "cancelled" if cancel and cancel.is_set() else "analysis_failed"
+            )
+            evidence.body["admission"]["reason_codes"] = [evidence.body["status"]]
+            evidence.body["admission"]["detail"] = str(exc)
+            evidence.save()
+        raise
 
 
 def isolated_generate_theme(theme: str, library: Path, *, cancel=None, **kwargs) -> DepotAsset:
@@ -759,7 +1132,7 @@ def isolated_generate_theme(theme: str, library: Path, *, cancel=None, **kwargs)
         "generate",
         {"theme": theme, "library": str(library), **kwargs},
         cancel=cancel,
-        timeout_s=max(1000, kwargs.get("duration_s", 165) * 16),
+        timeout_s=kwargs.get("render_timeout_s") or max(2000, kwargs.get("duration_s", 165) * 32),
     )
     manifest = AssetManifest.model_validate(body["manifest"])
     return DepotAsset(manifest, Path(body["path"]), frozenset(theme.lower().split()), {})

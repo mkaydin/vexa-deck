@@ -83,6 +83,7 @@ QPushButton { color: #90b2b7; background: #0c171d; border: 1px solid #28434b;
 QPushButton:hover { color: #a9ffee; background: #10272c; border-color: #63e6d2; }
 QPushButton:pressed { background: #17393d; color: #c9fff0; }
 QPushButton:checked { background: #132d31; color: #63e6d2; border-color: #63e6d2; }
+QPushButton:focus { border-color: #63e6d2; }
 QPushButton:disabled { color: #40555d; background: #0c1319; border-color: #1b2b33; }
 QPushButton#primary { background: #102a2d; border-color: #3a9b8e; color: #84f5d7; }
 QPushButton#danger { background: #201521; border-color: #66455f; color: #d99db8; }
@@ -91,7 +92,7 @@ QHeaderView::section { background: #122029; color: #91b5b8; padding: 8px;
     border: 0; border-bottom: 1px solid #28434b; }
 QTableWidget::item { padding: 6px; }
 QScrollArea { background: transparent; border: 0; }
-QWidget#videoSettingsBody { background: #0d151b; color: #c9dcd8; }
+QWidget#videoSettingsBody, QWidget#generationSettingsBody { background: #0d151b; color: #c9dcd8; }
 QComboBox, QSpinBox, QDoubleSpinBox, QListWidget { background: #080f14; color: #c9dcd8;
     border: 1px solid #28434b; padding: 5px; selection-background-color: #193e40; }
 QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #63e6d2; }
@@ -100,6 +101,8 @@ QComboBox QAbstractItemView { background: #0d151b; color: #c9dcd8;
 QTabWidget::pane { border: 1px solid #28434b; }
 QTabBar::tab { background: #0d151b; color: #748f96; padding: 8px 16px; }
 QTabBar::tab:selected { background: #102a2d; color: #63e6d2; }
+QProgressBar { border: 1px solid #28434b; background: #080f14; border-radius: 0; }
+QProgressBar::chunk { background: #63e6d2; border: 0; }
 QCheckBox { color: #c9dcd8; spacing: 8px; }
 QCheckBox::indicator { width: 12px; height: 12px; background: #080c10;
     border: 1px solid #31575d; }

@@ -13,14 +13,21 @@ from vexa_orchestrator.generation import _parse_track_plan, _theme_profile
 from vexa_orchestrator.vocal_intent import apply_instrumental_mode, has_vocal_delivery, vocal_intent
 
 
-@pytest.mark.parametrize("theme", [
-    "underground theme music with no lyrics",
-    "90s underground rap with no lyrics",
-    "trap without lyrics",
-    "a sad song without vocals",
-    "house with no singing",
-    "lyric-free jazz", "vocal free rap", "sözsüz rap", "vokalsiz techno", "sozsuz rap",
-])
+@pytest.mark.parametrize(
+    "theme",
+    [
+        "underground theme music with no lyrics",
+        "90s underground rap with no lyrics",
+        "trap without lyrics",
+        "a sad song without vocals",
+        "house with no singing",
+        "lyric-free jazz",
+        "vocal free rap",
+        "sözsüz rap",
+        "vokalsiz techno",
+        "sozsuz rap",
+    ],
+)
 def test_negated_lyrics_never_turn_into_a_vocal_request(theme):
     assert vocal_intent(theme) is False
     assert not _theme_profile(theme)[2]
@@ -60,19 +67,27 @@ def test_local_instrumental_plan_uses_no_lyric_sections_and_discards_vocal_refin
 ):
     theme = "90s underground rap with no lyrics"
     style = "Underground boom bap hip hop, dusty jazz chops and swung drums, no vocals."
-    monkeypatch.setattr("vexa_orchestrator.ace_planner.write_local_briefs", lambda *a: [
-        SimpleNamespace(style=style, lyrics="", origin="local-test")
-    ])
+    monkeypatch.setattr(
+        "vexa_orchestrator.ace_planner.write_local_briefs",
+        lambda *a: [SimpleNamespace(style=style, lyrics="", origin="local-test")],
+    )
     calls = []
 
     def sample(*a, **kwargs):
         calls.append(kwargs)
-        return {"caption": "Boom bap hip hop with a dry MC delivery and rap verses.",
-                "lyrics": "", "bpm": "92", "keyscale": "D minor",
-                "timesignature": "4", "language": "unknown", "duration": "165"}
+        return {
+            "caption": "Boom bap hip hop with a dry MC delivery and rap verses.",
+            "lyrics": "",
+            "bpm": "92",
+            "keyscale": "D minor",
+            "timesignature": "4",
+            "language": "unknown",
+            "duration": "165",
+        }
 
-    monkeypatch.setattr("vexa_orchestrator.ace_planner.TextPlanner",
-                        lambda: SimpleNamespace(sample=sample))
+    monkeypatch.setattr(
+        "vexa_orchestrator.ace_planner.TextPlanner", lambda: SimpleNamespace(sample=sample)
+    )
     monkeypatch.setattr("vexa_orchestrator.ace_planner.ROOT", tmp_path)
     row = plan_in_worker(theme, 1)["tracks"][0]
     assert row["lyrics"] == "" and row["music_plan"]["instrumental"] is True
@@ -96,8 +111,10 @@ def test_instrumental_depot_excludes_vocal_and_unknown_legacy_tracks(tmp_path):
         manifest.provenance.source_prompt = source
         manifest.tags = {"instrumental": [Estimate(value=value, confidence=0.8)]} if value else {}
         depot.add(manifest, tmp_path / f"{asset_id}.wav")
-    selected = {asset.manifest.asset_id for _, asset in depot.search(
-        "underground theme music with no lyrics")}
+    selected = {
+        asset.manifest.asset_id
+        for _, asset in depot.search("underground theme music with no lyrics")
+    }
     assert selected == {"instrumental", "legacy-instrumental"}
     selected = {asset.manifest.asset_id for _, asset in depot.search("underground rap")}
     assert "vocal" in selected and "instrumental" not in selected
@@ -106,26 +123,36 @@ def test_instrumental_depot_excludes_vocal_and_unknown_legacy_tracks(tmp_path):
 def test_api_applies_vocal_setting_at_start_and_theme_change():
     seen = []
     live = SimpleNamespace(
-        state=None, depot=SimpleNamespace(assets={}), stop=lambda: None,
+        state=None,
+        depot=SimpleNamespace(assets={}),
+        stop=lambda: None,
         start=lambda theme, **kw: seen.append(theme) or {"generating": True},
-        steer=lambda theme: seen.append(theme) or {"theme": theme},
+        steer=lambda theme, **kw: seen.append(theme) or {"theme": theme},
+        preview_generation=lambda theme, *a: {"plan": {"intent": {"theme": theme}}},
+        generation_settings=lambda: {"selected": {}},
         status=lambda: {"session_id": "test"},
     )
     app = create_app(live=live)
 
     def route(path):
-        return next(item.endpoint for item in app.routes if getattr(item, "path", "") == path
-                    and "POST" in item.methods)
+        return next(
+            item.endpoint
+            for item in app.routes
+            if getattr(item, "path", "") == path and "POST" in item.methods
+        )
 
-    created = route("/sessions")(CreateSessionBody(
-        theme="underground rap", session_id="test", instrumental=True))
+    created = route("/sessions")(
+        CreateSessionBody(theme="underground rap", session_id="test", instrumental=True)
+    )
     assert created.generating and vocal_intent(seen[0]) is False
     assert app.state.store.sessions["test"].state.theme == seen[0]
-    changed = route("/sessions/{session_id}/theme")("test", ThemeBody(
-        theme="underground rap with no lyrics", instrumental=False))
+    changed = route("/sessions/{session_id}/theme")(
+        "test", ThemeBody(theme="underground rap with no lyrics", instrumental=False)
+    )
     assert vocal_intent(seen[-1]) is True and changed["theme"] == seen[-1]
-    route("/sessions/{session_id}/theme")("test", ThemeBody(
-        theme="underground theme music with no lyrics"))
+    route("/sessions/{session_id}/theme")(
+        "test", ThemeBody(theme="underground theme music with no lyrics")
+    )
     assert vocal_intent(seen[-1]) is False
 
 
@@ -139,10 +166,17 @@ def test_instrumental_writer_and_music_query_do_not_request_lyric_stories(monkey
 
     def prompts(_base, _model, messages, *args):
         seen.extend(messages)
-        return json.dumps({"tracks": [{
-            "style": "Underground instrumental beat, deep bass and dusty drums, no vocals.",
-            "lyrics": "",
-        }]})
+        return json.dumps(
+            {
+                "tracks": [
+                    {
+                        "style": "Underground instrumental beat, deep bass and dusty drums, "
+                        "no vocals.",
+                        "lyrics": "",
+                    }
+                ]
+            }
+        )
 
     monkeypatch.setattr("vexa_orchestrator.generation._ollama_prompts", prompts)
     brief = _plan_remote_theme(theme, count=1, track_index=0)[0]
@@ -150,8 +184,16 @@ def test_instrumental_writer_and_music_query_do_not_request_lyric_stories(monkey
     assert "Describe instrumental sections only" in seen[0]["content"]
     assert "Count actual lyric lines" not in seen[0]["content"]
     genre, palette, vocal = _theme_profile(theme)
-    query = track_query(theme, genre=genre, palette=palette, vocal=vocal,
-                        duration_s=165, energy=0.35, index=0, role="opener")
+    query = track_query(
+        theme,
+        genre=genre,
+        palette=palette,
+        vocal=vocal,
+        duration_s=165,
+        energy=0.35,
+        index=0,
+        role="opener",
+    )
     assert "Write musical metadata only" in query and "Vocal language: unknown" in query
     assert "complete lyrics" not in query and "Each verse develops" not in query
 
@@ -166,31 +208,59 @@ def test_yue2_boundary_rejects_vocals_before_rendering_an_instrumental_request(
     for key in ("VEXA_YUE_BINARY", "VEXA_YUE_MODEL", "VEXA_YUE_VAE"):
         monkeypatch.setenv(key, str(component))
     with pytest.raises(ValueError, match="empty lyrics"):
-        generate_theme("underground music with no lyrics", tmp_path,
-                       style="Dusty breakbeats and a deep dark bass.", lyrics="Unwanted words.")
+        generate_theme(
+            "underground music with no lyrics",
+            tmp_path,
+            style="Dusty breakbeats and a deep dark bass.",
+            lyrics="Unwanted words.",
+        )
     with pytest.raises(ValueError, match="vocal delivery"):
-        generate_theme("underground music with no lyrics", tmp_path,
-                       style="Dusty breakbeats and a deep bass with spoken rap verses.")
+        generate_theme(
+            "underground music with no lyrics",
+            tmp_path,
+            style="Dusty breakbeats and a deep bass with spoken rap verses.",
+        )
     assert not list(tmp_path.glob("*.request.json"))
 
 
-@pytest.mark.parametrize("style", [
-    "JDM phonk, no vocals, singing or humming. Cowbell and 808 riffs.",
-    "Instrumental phonk without any vocal samples or sung choruses.",
-    "Phonk without vocals and without singing, just distorted bass.",
-    "Phonk, exclude spoken words, rap samples and vocal chops.",
-])
+@pytest.mark.parametrize(
+    "style",
+    [
+        "JDM phonk, no vocals, singing or humming. Cowbell and 808 riffs.",
+        "Instrumental phonk without any vocal samples or sung choruses.",
+        "Phonk without vocals and without singing, just distorted bass.",
+        "Phonk, exclude spoken words, rap samples and vocal chops.",
+        "Instrumental techno. No vocals, speech, humming or vocal samples.",
+    ],
+)
 def test_negative_vocal_lists_are_not_positive_vocal_directions(style):
     assert not has_vocal_delivery(style)
 
 
-@pytest.mark.parametrize("style", [
-    "Phonk, no singing but chopped vocal samples.",
-    "No lyrics, but Memphis rap samples and humming form a hook.",
-    "Phonk without vocals in the intro. Add a singer at the drop.",
-])
+@pytest.mark.parametrize(
+    "style",
+    [
+        "Phonk, no singing but chopped vocal samples.",
+        "No lyrics, but Memphis rap samples and humming form a hook.",
+        "Phonk without vocals in the intro. Add a singer at the drop.",
+        "No vocals, speech or humming in the intro. Add spoken words at the drop.",
+    ],
+)
 def test_negation_does_not_hide_positive_vocals_elsewhere(style):
     assert has_vocal_delivery(style)
+
+
+@pytest.mark.parametrize(
+    "style",
+    [
+        "Strictly instrumental, avoiding any vocals or lyrics.",
+        "A hazy atmosphere without any EDM drops or vocal elements.",
+        "Keep the mix dense without introducing vocals or melodic breaks.",
+    ],
+)
+def test_mixed_exclusions_and_gerunds_do_not_request_vocals(style):
+    assert not has_vocal_delivery(style)
+    assert has_vocal_delivery(style + " Add a female singer in the chorus.")
 
 
 def test_repaired_instrumental_phonk_preserves_music_and_clears_vocal_samples():
@@ -217,9 +287,17 @@ def test_entirely_vocal_description_recovers_as_ten_distinct_phonk_briefs():
     from vexa_orchestrator.music_plan import tempo_hint
 
     theme = "jdm phonk no lyrics"
-    raw = json.dumps({"tracks": [{
-        "style": "Female vocals and male rap verses with chopped vocal hooks.", "lyrics": ""
-    } for _ in range(10)]})
+    raw = json.dumps(
+        {
+            "tracks": [
+                {
+                    "style": "Female vocals and male rap verses with chopped vocal hooks.",
+                    "lyrics": "",
+                }
+                for _ in range(10)
+            ]
+        }
+    )
     repaired, changes = _repair_instrumental_plan(raw, theme, 10)
     briefs = _parse_track_plan(repaired, theme, 10, "test")
     assert len(changes) == len(briefs) == len({row.style for row in briefs}) == 10
@@ -241,10 +319,17 @@ def test_writer_recovers_instrumental_voice_drift_without_aborting_or_retrying(
 
     def prompts(*args):
         calls.append(args)
-        return json.dumps({"tracks": [{
-            "style": "JDM phonk, cowbell riffs and bass. Chopped vocal samples add a hook.",
-            "lyrics": "",
-        }]})
+        return json.dumps(
+            {
+                "tracks": [
+                    {
+                        "style": "JDM phonk, cowbell riffs and bass. "
+                        "Chopped vocal samples add a hook.",
+                        "lyrics": "",
+                    }
+                ]
+            }
+        )
 
     monkeypatch.setattr("vexa_orchestrator.generation._ollama_prompts", prompts)
     brief = _plan_remote_theme("jdm phonk instrumental", count=1)[0]
@@ -260,7 +345,8 @@ def test_retry_clears_old_planning_error(monkeypatch, tmp_path):
 
     live = LiveSet(SimpleNamespace(library=tmp_path), preview_dir=tmp_path / "previews")
     live.error = "track prompt planning failed: previous description"
-    monkeypatch.setattr("vexa_orchestrator.live.threading.Thread", lambda **kw: SimpleNamespace(
-        start=lambda: None))
+    monkeypatch.setattr(
+        "vexa_orchestrator.live.threading.Thread", lambda **kw: SimpleNamespace(start=lambda: None)
+    )
     assert live._queue_generation("jdm phonk instrumental", "test")
     assert live.error is None and live.status()["generating"]

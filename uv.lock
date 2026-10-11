@@ -1531,6 +1531,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+audio-observers = [
+    { name = "huggingface-hub" },
+    { name = "torch" },
+    { name = "transformers" },
+]
 core = [
     { name = "fastapi" },
     { name = "httpx" },
@@ -1538,6 +1543,7 @@ core = [
     { name = "numpy" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "scipy" },
     { name = "soundfile" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1569,15 +1575,19 @@ requires-dist = [
     { name = "diffusers", marker = "extra == 'gpu'", specifier = ">=0.31" },
     { name = "fastapi", marker = "extra == 'core'", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'core'", specifier = ">=0.27" },
+    { name = "huggingface-hub", marker = "extra == 'audio-observers'", specifier = ">=1.0" },
     { name = "huggingface-hub", marker = "extra == 'local-planner'", specifier = ">=1.0" },
     { name = "librosa", marker = "extra == 'core'", specifier = ">=0.10" },
     { name = "numpy", marker = "extra == 'core'", specifier = ">=1.26" },
     { name = "pydantic", marker = "extra == 'core'", specifier = ">=2.9" },
     { name = "pydantic-settings", marker = "extra == 'core'", specifier = ">=2.6" },
     { name = "pyside6", marker = "extra == 'desktop'", specifier = "==6.11.2" },
+    { name = "scipy", marker = "extra == 'core'", specifier = ">=1.13" },
     { name = "soundfile", marker = "extra == 'core'", specifier = ">=0.12" },
+    { name = "torch", marker = "extra == 'audio-observers'", specifier = ">=2.14" },
     { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.14" },
     { name = "torch", marker = "extra == 'local-planner'", specifier = ">=2.14" },
+    { name = "transformers", marker = "extra == 'audio-observers'", specifier = ">=5.18" },
     { name = "transformers", marker = "extra == 'gpu'", specifier = ">=5.18" },
     { name = "transformers", marker = "extra == 'local-planner'", specifier = ">=5.18" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'core'", specifier = ">=0.32" },
@@ -1588,7 +1598,7 @@ requires-dist = [
     { name = "vexa-planner", editable = "services/planner" },
     { name = "vexa-yue2-worker", editable = "workers/yue2" },
 ]
-provides-extras = ["core", "desktop", "local-planner", "gpu"]
+provides-extras = ["core", "desktop", "local-planner", "audio-observers", "gpu"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1682,6 +1692,7 @@ dependencies = [
 analysis = [
     { name = "librosa" },
     { name = "numpy" },
+    { name = "scipy" },
     { name = "soundfile" },
 ]
 torch = [
@@ -1696,6 +1707,7 @@ requires-dist = [
     { name = "librosa", marker = "extra == 'analysis'", specifier = ">=0.10" },
     { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.9" },
+    { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.13" },
     { name = "soundfile", marker = "extra == 'analysis'", specifier = ">=0.12" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.14" },
     { name = "transformers", marker = "extra == 'torch'", specifier = ">=5.18" },

@@ -45,6 +45,14 @@ from .enums import (
     SourceType,
 )
 from .jobs import GenerationBrief, GenerationJob, GenerationResult
+from .music import (
+    CreativeDraft,
+    GenerationSettings,
+    LyricsDraft,
+    PlannedSection,
+    ThemeSpec,
+    TrackPlan,
+)
 from .requests import RequestConstraints, RequestLog, RequestStatus, UserRequest
 from .schema import export_schemas, registry, schema_bundle
 from .session import DeckId, DeckState, MusicalClock, SessionState
@@ -90,6 +98,12 @@ __all__ = [
     "GenerationJob",
     "GenerationResult",
     "JOB_TRANSITIONS",
+    "ThemeSpec",
+    "GenerationSettings",
+    "TrackPlan",
+    "PlannedSection",
+    "CreativeDraft",
+    "LyricsDraft",
     # enums
     "ActionType",
     "ApprovalState",

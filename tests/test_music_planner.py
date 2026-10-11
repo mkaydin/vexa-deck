@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 from vexa_orchestrator.ace_planner import MODEL_NAME, parse_sample, plan_in_worker
-from vexa_orchestrator.generation import _theme_profile, plan_theme
-from vexa_orchestrator.music_plan import arrangement, track_query, validate_metadata
+from vexa_orchestrator.generation import _parse_track_plan, _theme_profile, plan_theme
+from vexa_orchestrator.music_plan import arrangement, tempo_hint, track_query, validate_metadata
 
 
 def sample(lyrics=None, caption=None):
@@ -72,6 +72,27 @@ def test_trap_is_not_forced_into_boom_bap_and_song_request_is_vocal():
     assert "trap" in genre and "808" in palette and vocal
     assert _theme_profile("a sad love song with guitar")[2]
     assert not _theme_profile("a sad love song instrumental")[2]
+
+
+def test_memphis_phonk_keeps_its_sample_palette_and_slow_tempo():
+    genre, palette, vocal = _theme_profile("Memphis phonk instrumental")
+    assert genre == "Memphis phonk" and not vocal
+    assert "piano" in palette and "cassette" in palette and "cowbell" not in palette
+    assert tempo_hint("Memphis phonk", genre) == 88
+    assert tempo_hint("Memphis phonk 96 BPM", genre) == 96
+    query = track_query("Memphis phonk instrumental", genre=genre, palette=palette,
+                        vocal=vocal, duration_s=165, energy=0.35, index=0, role="opener")
+    assert "88 BPM" in query and "cassette" in query
+
+
+@pytest.mark.parametrize("style", [
+    "Phonk, distorted bass and a repeating minor keyboard loop.",
+    "Memphis phonk with JDM drift drums and rapid cowbell riffs.",
+])
+def test_memphis_prompt_cannot_silently_switch_to_generic_or_drift_phonk(style):
+    with pytest.raises(ValueError, match="subgenre"):
+        _parse_track_plan(json.dumps({"tracks": [{"style": style, "lyrics": ""}]}),
+                          "Memphis phonk instrumental", 1, "test")
 
 
 def test_metadata_keeps_explicit_bpm_and_is_not_a_measured_audio_feature():

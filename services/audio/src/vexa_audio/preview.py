@@ -14,12 +14,34 @@ because during collection the listener is not also listening to a set.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from .equalizer import EqualizerSettings
 from .loader import PreloadedTrack
+from .mixer import Mixer
+from .queue import Command, CommandKind
+
+
+def dsp_identity(
+    sample_rate: int,
+    blocksize: int,
+    equalizer: EqualizerSettings,
+    gains: tuple[float, float] = (1.0, 1.0),
+) -> str:
+    """Bind measured previews to the actual master processing configuration."""
+    body = {
+        "version": "mixer-preview-v1",
+        "sample_rate": sample_rate,
+        "blocksize": blocksize,
+        "equalizer": equalizer.to_dict(),
+        "gains": gains,
+    }
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +79,15 @@ class PreviewRenderer:
         sample_rate: int = 44100,
         channels: int = 2,
         out_dir: str | Path = "var/previews",
+        blocksize: int = 2048,
+        equalizer: EqualizerSettings | None = None,
+        gains: tuple[float, float] = (1.0, 1.0),
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
+        self.blocksize = blocksize
+        self.equalizer = equalizer or EqualizerSettings()
+        self.gains = gains
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -89,26 +117,35 @@ class PreviewRenderer:
         tail = int(spec.tail_s * sr)
         total = lead + fade + tail
 
-        a = _slice_from(outgoing, entry_bar, lead + fade, self.channels,
-                        start_s=outgoing_start_s)
-        b = _slice_from(incoming, incoming_entry_bar, fade + tail, self.channels,
-                        start_s=incoming_entry_s)
+        a = _slice_from(outgoing, entry_bar, lead + fade, self.channels, start_s=outgoing_start_s)
+        b = _slice_from(
+            incoming, incoming_entry_bar, fade + tail, self.channels, start_s=incoming_entry_s
+        )
         if len(a) != lead + fade or len(b) != fade + tail:
             raise ValueError("preview cue extends beyond an audio asset")
 
+        if outgoing.sample_rate != sr or incoming.sample_rate != sr:
+            raise ValueError("preview PCM must use the playback sample rate")
+        # Run the callback DSP itself: identical equal-power law, deck gains, EQ and
+        # stateful limiter. No clip-wide normalisation that playback cannot reproduce.
+        mixer = Mixer(sample_rate=sr, channels=self.channels, max_block=self.blocksize)
+        mixer.equalizer.configure(self.equalizer)
+        first = PreloadedTrack(outgoing.content_sha256, a, sr, self.channels)
+        second = PreloadedTrack(incoming.content_sha256, b, sr, self.channels)
+        mixer.queue.put(Command(CommandKind.LOAD_TRACK, deck=0, value=1, track=first))
+        mixer.queue.put(Command(CommandKind.SET_GAIN, deck=0, value=self.gains[0]))
+        mixer.queue.put(Command(CommandKind.SET_GAIN, deck=1, value=self.gains[1]))
         audio = np.zeros((total, self.channels), dtype=np.float32)
-        audio[:lead] = a[:lead]
-        if fade:
-            ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-            audio[lead : lead + fade] = (
-                a[lead:] * np.cos(ramp * np.pi / 2)[:, None]
-                + b[:fade] * np.sin(ramp * np.pi / 2)[:, None]
-            )
-        audio[lead + fade :] = b[fade:]
-
-        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-        if peak > 0.891:  # -1 dBFS, same ceiling the master limiter uses
-            audio *= 0.891 / peak
+        for begin, end in ((0, lead), (lead, total)):
+            if begin == lead:
+                mixer.queue.put(
+                    Command(CommandKind.START_CROSSFADE, deck=1, value2=max(1, fade), track=second)
+                )
+            for offset in range(begin, end, self.blocksize):
+                count = min(self.blocksize, end - offset)
+                mixer.render(audio[offset : offset + count], count)
+        if mixer.stats.underruns:
+            raise ValueError("preview DSP failed")
 
         path = self.out_dir / f"{out_name}.wav"
         _write(path, audio, sr)
@@ -122,8 +159,23 @@ class PreviewRenderer:
         audio = _slice_from(track, entry_bar, frames, self.channels)
         if len(audio) != frames:
             raise ValueError("hold preview extends beyond an audio asset")
+        if track.sample_rate != self.sample_rate:
+            raise ValueError("preview PCM must use the playback sample rate")
+        mixer = Mixer(
+            sample_rate=self.sample_rate, channels=self.channels, max_block=self.blocksize
+        )
+        mixer.equalizer.configure(self.equalizer)
+        source = PreloadedTrack(track.content_sha256, audio, self.sample_rate, self.channels)
+        mixer.queue.put(Command(CommandKind.LOAD_TRACK, deck=0, value=1, track=source))
+        mixer.queue.put(Command(CommandKind.SET_GAIN, deck=0, value=self.gains[0]))
+        output = np.zeros_like(audio)
+        for offset in range(0, frames, self.blocksize):
+            count = min(self.blocksize, frames - offset)
+            mixer.render(output[offset : offset + count], count)
+        if mixer.stats.underruns:
+            raise ValueError("hold preview DSP failed")
         path = self.out_dir / f"{out_name}.wav"
-        _write(path, audio, self.sample_rate)
+        _write(path, output, self.sample_rate)
         return Preview(spec.label, path, frames / self.sample_rate)
 
     def render_comparison(
@@ -161,9 +213,7 @@ class PreviewRenderer:
             removed += 1
         return removed
 
-    def render_manifest(
-        self, previews: dict[str, Preview], path: str | Path
-    ) -> Path:
+    def render_manifest(self, previews: dict[str, Preview], path: str | Path) -> Path:
         """Write what was played, so a label can be traced back to its audio.
 
         ``README.md:22`` asks for reproducibility: the request, the assets, the action, the
@@ -182,25 +232,36 @@ class PreviewRenderer:
 
 
 def _slice_from(
-    track: PreloadedTrack, entry_bar: int, frames: int, channels: int,
-    *, start_s: float | None = None,
+    track: PreloadedTrack,
+    entry_bar: int,
+    frames: int,
+    channels: int,
+    *,
+    start_s: float | None = None,
 ) -> np.ndarray:
     """Source samples from a cue; the caller decides where they land in the preview."""
-    start = (round(start_s * track.sample_rate) if start_s is not None else
-             track.sample_at_bar(entry_bar) if track.can_seek_by_bar else entry_bar)
+    start = (
+        round(start_s * track.sample_rate)
+        if start_s is not None
+        else track.sample_at_bar(entry_bar)
+        if track.can_seek_by_bar
+        else entry_bar
+    )
     start = max(0, min(start, track.frames))
     block = track.samples[start : start + frames]
     if block.shape[1] != channels:
-        block = block[:, :channels] if block.shape[1] > channels else np.repeat(
-            block, channels // block.shape[1] + 1, axis=1
-        )[:, :channels]
+        block = (
+            block[:, :channels]
+            if block.shape[1] > channels
+            else np.repeat(block, channels // block.shape[1] + 1, axis=1)[:, :channels]
+        )
     return block
 
 
 def _write(path: Path, audio: np.ndarray, sr: int) -> None:
     import soundfile as sf
 
-    sf.write(str(path), audio, sr, subtype="PCM_16")
+    sf.write(str(path), audio, sr, subtype="FLOAT")
 
 
 def _slug(text: str) -> str:

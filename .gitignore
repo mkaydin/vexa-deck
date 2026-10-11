@@ -81,3 +81,6 @@ Thumbs.db
 *.md
 *.markdown
 !/README.md
+
+# Native/Python generator runtime caches
+/.cache/

@@ -83,6 +83,8 @@ class MixStats:
     output_underflows: int = 0
     frames_rendered: int = 0
     worst_callback_s: float = 0.0
+    deadline_misses: int = 0
+    last_callback_s: float = 0.0
     silence_blocks: int = 0
     fade_blocks: int = 0
 
@@ -163,6 +165,9 @@ class Mixer:
         self.stats.callbacks += 1
         self.stats.frames_rendered += frames
         elapsed = time.perf_counter() - started
+        self.stats.last_callback_s = elapsed
+        if elapsed > frames / self.sample_rate:
+            self.stats.deadline_misses += 1
         if elapsed > self.stats.worst_callback_s:
             self.stats.worst_callback_s = elapsed
 
@@ -255,6 +260,8 @@ class Mixer:
             if deck.fade_remaining <= 0:
                 deck.fade_remaining = 0
                 deck.fade_gain = deck.fade_target
+                if deck.fade_target == 0.0:
+                    deck.playing = False
             else:
                 fraction = 1.0 - deck.fade_remaining / deck.fade_total
                 deck.fade_gain = (
@@ -293,6 +300,7 @@ class Mixer:
                     if deck.track else 0
                 )
                 deck.cue_point = deck.position
+                deck.tempo_ratio = 1.0
                 deck.fade_gain = 1.0
                 deck.fade_target = 1.0
                 deck.fade_remaining = 0
@@ -373,6 +381,8 @@ class Mixer:
                 "output_underflows": self.stats.output_underflows,
                 "frames": self.stats.frames_rendered,
                 "worst_callback_ms": round(self.stats.worst_callback_s * 1000, 3),
+                "last_callback_ms": round(self.stats.last_callback_s * 1000, 3),
+                "deadline_misses": self.stats.deadline_misses,
                 "silence_blocks": self.stats.silence_blocks,
                 "fade_blocks": self.stats.fade_blocks,
                 "queue_dropped": self.queue.stats.dropped,

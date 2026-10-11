@@ -132,14 +132,10 @@ def analyse(
     quality.decode_ok = True
     if probe.channels != t.required_channels:
         quality.decode_ok = False
-        quality.flags.append(
-            f"expected {t.required_channels} channels, decoded {probe.channels}"
-        )
+        quality.flags.append(f"expected {t.required_channels} channels, decoded {probe.channels}")
     if probe.sample_rate_hz not in t.allowed_sample_rates:
         quality.decode_ok = False
-        quality.flags.append(
-            f"sample rate {probe.sample_rate_hz} not in {t.allowed_sample_rates}"
-        )
+        quality.flags.append(f"sample rate {probe.sample_rate_hz} not in {t.allowed_sample_rates}")
 
     # -- duration -----------------------------------------------------------
     quality.duration_ok = t.min_duration_s <= probe.duration_s <= t.max_duration_s
@@ -181,9 +177,7 @@ def analyse(
     if probe.rms < t.silence_rms:
         quality.flags.append("file is silent")
     if probe.clipped_sample_ratio > t.max_clipped_sample_ratio:
-        quality.flags.append(
-            f"{probe.clipped_sample_ratio:.4%} of samples are clipped"
-        )
+        quality.flags.append(f"{probe.clipped_sample_ratio:.4%} of samples are clipped")
 
     # -- loop boundary ------------------------------------------------------
     # A tempo estimate alone cannot verify a loop: it says nothing about the first downbeat,
@@ -194,10 +188,17 @@ def analyse(
 
     sections: list[SectionMarker] = []
     if temporal is not None and temporal.bpm > 0:
-        seconds_per_bar = 240.0 / temporal.bpm
+        # Use the serialized grid's tempo, just as AssetManifest's region validator does.
+        # Novelty boundaries can round into the trailing partial bar; they must not
+        # create a section beyond the file or turn valid audio into a schema failure.
+        seconds_per_bar = 240.0 / round(temporal.bpm, 3)
         total_bars = int(probe.duration_s / seconds_per_bar)
-        if temporal.section_bars:
-            edges = [0, *temporal.section_bars, max(total_bars, 1)]
+        if total_bars > 0 and temporal.section_bars:
+            edges = [
+                0,
+                *sorted({bar for bar in temporal.section_bars if 0 < bar < total_bars}),
+                total_bars,
+            ]
             from itertools import pairwise
 
             for index, (start, end) in enumerate(pairwise(edges)):

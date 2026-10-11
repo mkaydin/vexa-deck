@@ -98,8 +98,8 @@ def master(
 ) -> MasterReport:
     """Normalise and limit an audio file in place. Returns what changed.
 
-    The true-peak ceiling is applied *before* the loudness gain, because gaining a signal up can
-    push a previously-compliant peak over the limit.
+    Apply loudness gain, then soft limiting and a final measured intersample-peak check.
+    Do not hard-clip before limiting: that would introduce irreversible distortion.
     """
     import soundfile as sf
 
@@ -115,8 +115,13 @@ def master(
     else:
         gain_db = target_lufs - before.integrated_lufs
 
-    gained = np.clip(samples * (10 ** (gain_db / 20.0)), -1.0, 1.0)
+    gained = samples * (10 ** (gain_db / 20.0))
     mastered, was_limited = _soft_limit(gained, ceiling_dbtp)
+    # Sample limiting alone cannot enforce intersample headroom.
+    final_peak = measure_true_peak(mastered, probe.sample_rate_hz)
+    if np.isfinite(final_peak) and final_peak > ceiling_dbtp:
+        mastered *= 10 ** ((ceiling_dbtp - final_peak - 0.01) / 20)
+        was_limited = True
     if overwrite:
         sf.write(str(path), mastered, probe.sample_rate_hz, subtype="PCM_24")
 

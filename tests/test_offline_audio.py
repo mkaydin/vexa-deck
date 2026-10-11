@@ -71,7 +71,7 @@ def test_legacy_instrumental_batch_is_not_selected_for_vocal_rap(tmp_path):
     from types import SimpleNamespace
 
     manifest = SimpleNamespace(
-        asset_id="legacy",
+        asset_id="legacy", title=None, content_sha256="a" * 64,
         family_id="legacy",
         admissible=lambda: True,
         provenance=SimpleNamespace(source_prompt="1990s underground rap hip hop music"),

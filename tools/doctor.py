@@ -105,6 +105,17 @@ def check(generation: bool = False) -> dict:
         record("RTX 5060 Ti", "RTX 5060 Ti" in probe.stdout, probe.stdout.strip(), generation)
     else:
         record("RTX 5060 Ti", False, "nvidia-smi unavailable", generation)
+    if python.is_file():
+        probe = subprocess.run(
+            [str(python), "-c", "import json; from vexa_orchestrator.generators import catalog; "
+             "print(json.dumps(catalog()))"],
+            env=environment, capture_output=True, text=True,
+        )
+        if probe.returncode == 0:
+            for model in json.loads(probe.stdout):
+                for preset in model["presets"]:
+                    record(f"{model['name']} / {preset['id']}", preset["available"],
+                           preset["reason"] or "components installed", False)
     return {"ok": all(row["ok"] for row in rows if row["required"]), "checks": rows}
 
 

@@ -14,7 +14,7 @@ import socket
 import subprocess
 import time
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import httpx
@@ -175,9 +175,11 @@ class TextPlanner:
 
 
 @contextmanager
-def local_writer_server():
+def local_writer_server(*, configured_url: str | None = None):
     """Use a private Ollama worker bound to the same single GPU as ACE-Step/YuE2."""
-    configured = os.environ.get("VEXA_ACE_WRITER_URL", "").strip()
+    configured = (
+        os.environ.get("VEXA_ACE_WRITER_URL", "") if configured_url is None else configured_url
+    ).strip()
     if configured:
         yield configured.rstrip("/")
         return
@@ -232,7 +234,7 @@ def local_writer_server():
                     process.wait()
 
 
-def write_local_briefs(theme: str, count: int):
+def write_local_briefs(theme: str, count: int, *, generator: str = "yue2"):
     """Use a local general LLM for coherent, original theme-specific lyrics."""
     from .generation import _plan_remote_theme
     from .music_plan import lyric_lines
@@ -257,7 +259,29 @@ def write_local_briefs(theme: str, count: int):
             briefs = []
             for index in range(count):
                 LOGGER.info("ACE-Step lyric writing track=%d/%d", index + 1, count)
-                brief = _plan_remote_theme(theme, count=1, track_index=index)[0]
+                brief = _plan_remote_theme(
+                    theme,
+                    count=1,
+                    track_index=index,
+                    **({"generator": generator} if generator == "minimax" else {}),
+                )[0]
+                if generator == "minimax":
+                    from .generation import ENERGY_ARC, TRACK_DURATIONS
+                    from .music_plan import arrangement
+
+                    plan = {**brief.music_plan, "requested_duration_s": TRACK_DURATIONS[index]}
+                    plan["sections"] = arrangement(
+                        TRACK_DURATIONS[index],
+                        plan["bpm"],
+                        vocal=bool(brief.lyrics),
+                        rap="hip hop" in plan["genre"],
+                    )
+                    brief = replace(
+                        brief,
+                        duration_s=TRACK_DURATIONS[index],
+                        energy=ENERGY_ARC[index],
+                        music_plan=plan,
+                    )
                 if brief.lyrics and any(old.lyrics == brief.lyrics for old in briefs):
                     raise ValueError(f"local lyric writer repeated track {index + 1}")
                 briefs.append(brief)
@@ -284,12 +308,34 @@ def write_local_briefs(theme: str, count: int):
         return briefs
 
 
-def plan_in_worker(theme: str, count: int) -> dict:
+def plan_in_worker(theme: str, count: int, *, generator: str = "yue2") -> dict:
     # Imported here only; the audio host never imports torch/transformers.
     from .generation import ENERGY_ARC, ROLES, TRACK_DURATIONS, _parse_track_plan, _theme_profile
 
     started = time.monotonic()
     genre, palette, vocal = _theme_profile(theme)
+    if generator == "minimax":
+        from .minimax_prompts import FORMAT
+
+        written = write_local_briefs(theme, count, generator=generator)
+        report = ROOT / "var/plans" / f"minimax-{time.time_ns()}.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        rows = [asdict(replace(brief, origin=f"{brief.origin}+{FORMAT}")) for brief in written]
+        report.write_text(
+            json.dumps(
+                {
+                    "theme": theme,
+                    "generator": generator,
+                    "caption_format": FORMAT,
+                    "tracks": rows,
+                    "elapsed_s": time.monotonic() - started,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        LOGGER.info("MiniMax structured caption plan saved %s; writer GPU released", report)
+        return {"tracks": rows, "report": str(report)}
     written = write_local_briefs(theme, count)
     planner = TextPlanner()
     briefs = []
@@ -345,8 +391,10 @@ def plan_in_worker(theme: str, count: int) -> dict:
                         1,
                         MODEL_NAME,
                     )
-                    if vocal and "boom bap" in genre and re.search(
-                        r"singing|sung|croon", sample["caption"], re.I
+                    if (
+                        vocal
+                        and "boom bap" in genre
+                        and re.search(r"singing|sung|croon", sample["caption"], re.I)
                     ):
                         raise ValueError("musical refinement introduced singing into spoken rap")
                 except ValueError as exc:

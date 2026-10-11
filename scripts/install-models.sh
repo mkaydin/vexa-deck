@@ -5,10 +5,10 @@ cd "$vexa_source"
 vexa_component="${1:-all}"
 case "$vexa_component" in
     -h|--help)
-        echo "Usage: bash scripts/install-models.sh [all|yue2|planner|writer]"
+        echo "Usage: bash scripts/install-models.sh [all|yue2|planner|writer|minimax|acestep]"
         echo "Downloads multi-GB weights. Requires CUDA build tools for yue2 and Ollama for writer."
         exit 0 ;;
-    all|yue2|planner|writer) ;;
+    all|yue2|planner|writer|minimax|acestep) ;;
     *) echo "Unknown model component: $vexa_component" >&2; exit 2 ;;
 esac
 if [[ ! -x .venv/bin/python ]]; then
@@ -31,4 +31,12 @@ if [[ "$vexa_component" == all || "$vexa_component" == writer ]]; then
         exit 1
     fi
     .venv/bin/python tools/install_local_lyric_writer.py
+fi
+
+# Optional audio generators: separate downloads, never part of the default set.
+if [[ "$vexa_component" == minimax ]]; then
+    .venv/bin/python tools/install_minimax_music.py
+fi
+if [[ "$vexa_component" == acestep ]]; then
+    .venv/bin/python tools/install_acestep_audio.py
 fi

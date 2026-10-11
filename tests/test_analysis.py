@@ -12,6 +12,7 @@ import pytest
 from vexa_contracts import ApprovalState, SourceType
 from vexa_yue2.analysis import (
     REFERENCE_RATE,
+    TemporalAnalysis,
     measure_loudness,
     measure_true_peak,
     probe_audio,
@@ -19,6 +20,45 @@ from vexa_yue2.analysis import (
 from vexa_yue2.gates import GateThresholds, analyse
 
 SR = REFERENCE_RATE
+
+
+@pytest.mark.parametrize(
+    "duration,bpm,boundaries",
+    [
+        (15.9, 120.0, [1, 7, 8, 9]),
+        (16.0, 119.9999, [1, 7, 8]),
+        (16.0, 120.0, [9, 2, 2, -1, 100]),
+        (0.4, 120.0, [1]),
+    ],
+)
+def test_section_estimates_cannot_escape_serialized_grid_or_partial_final_bar(
+    monkeypatch, tmp_path, duration, bpm, boundaries
+):
+    path = tmp_path / "section-boundary.wav"
+    samples = sine(1000, duration, amplitude=0.1)
+    write_wav(path, np.stack([samples, samples], axis=1))
+    monkeypatch.setattr(
+        "vexa_yue2.gates.detect_temporal",
+        lambda *_: TemporalAnalysis(bpm, 0.9, "C minor", 0.9, boundaries),
+    )
+    outcome = analyse(
+        path,
+        asset_id="boundary",
+        source_type=SourceType.YUE2_RENDER,
+        thresholds=GateThresholds(min_duration_s=0.1),
+    )
+    manifest = outcome.manifest
+    assert manifest is not None
+    bars = manifest._bars()
+    assert all(0 <= section.start_bar < section.end_bar <= bars for section in manifest.sections)
+    if bars:
+        assert manifest.sections[0].start_bar == 0 and manifest.sections[-1].end_bar == bars
+        assert all(
+            a.end_bar == b.start_bar
+            for a, b in zip(manifest.sections, manifest.sections[1:], strict=False)
+        )
+    else:
+        assert manifest.sections == []
 
 
 def sine(freq: float, seconds: float, amplitude: float = 0.5, sr: int = SR) -> np.ndarray:
@@ -44,6 +84,7 @@ def click_track(seconds: float, bpm: float = 120.0, sr: int = SR, bed_dbfs: floa
     for index in range(0, len(click), period):
         click[index : index + 400] += 0.6
     return np.clip(bed + click, -1.0, 1.0)
+
 
 def sine_rms_dbfs(dbfs: float, freq: float = 1000.0, seconds: float = 10.0, sr: int = SR):
     """A sine whose **RMS** is ``dbfs`` dBFS.
@@ -86,13 +127,15 @@ def test_quiet_noise_is_gated_out_rather_than_reported():
     assert measured.integrated_lufs == pytest.approx(-16.0, abs=0.5)
 
 
-def test_stereo_content_is_measured_from_the_channel_mean():
-    """BS.1770 sums channel powers; identical channels must not read 3 LU hot."""
+def test_stereo_content_sums_independent_channel_power():
+    """Two equal channels add 3.01 LU; a polarity inversion cannot erase loudness."""
     left = sine(1000.0, 8.0, amplitude=10 ** (-23 / 20))
     both = np.stack([left, left], axis=1)
     mono = measure_loudness(left, SR).integrated_lufs
     stereo = measure_loudness(both, SR).integrated_lufs
-    assert stereo == pytest.approx(mono, abs=0.2)
+    assert stereo == pytest.approx(mono + 10 * np.log10(2), abs=0.2)
+    inverted = measure_loudness(np.stack([left, -left], axis=1), SR).integrated_lufs
+    assert inverted == pytest.approx(stereo, abs=0.2)
 
 
 # --- True peak --------------------------------------------------------------

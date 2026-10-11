@@ -73,6 +73,7 @@ def tempo_hint(theme: str, genre: str) -> float:
             raise ValueError("requested tempo must be between 40 and 220 BPM")
         return bpm
     for pattern, bpm in (
+        (r"memphis.*phonk", 88),
         (r"phonk", 150),
         (r"trap", 140),
         (r"hip hop|boom bap|rap", 92),
@@ -151,8 +152,9 @@ def track_query(
         "When the theme only names a genre, choose an original genre-appropriate story. "
         "Use concrete images and a coherent narrative, not generic party/love slogans. "
         "Each verse develops the story and the refrain states its central idea. "
-        if vocal else
-        "Express the theme through instrumental timbre, harmony, groove and developing motifs. "
+        if vocal
+        else "Express the theme through instrumental timbre, harmony, groove "
+        "and developing motifs. "
         "Do not introduce a singer, MC, vocal samples, spoken words or humming. "
     )
     return (
@@ -177,10 +179,14 @@ def lyric_lines(lyrics: str) -> list[str]:
     ]
 
 
-def validate_lyric_theme(theme: str, lyrics: str) -> None:
+def validate_lyric_theme(theme: str, lyrics: str, *, language: str | None = None) -> None:
     """Catch obvious narrative drift for explicit 'about …' topics; not a semantic score."""
     topic = re.search(r"\babout\s+(.+)", theme, re.I)
     if not topic:
+        return
+    # English substring matching cannot judge translated lyrics. Unknown semantic
+    # adherence is preferable to rejecting a Turkish song for lacking English words.
+    if (language or vocal_language(theme)) != "en":
         return
     stopwords = {
         "about",

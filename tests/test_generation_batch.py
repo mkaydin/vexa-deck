@@ -112,7 +112,22 @@ def test_live_batch_admits_ten_tracks_and_reports_progress(monkeypatch, tmp_path
     )
 
     def fake_generate(
-        theme, library, *, duration_s, energy, style, prompt_origin, cancel, lyrics="", title=""
+        theme,
+        library,
+        *,
+        duration_s,
+        energy,
+        style,
+        prompt_origin,
+        cancel,
+        lyrics="",
+        title="",
+        generator="yue2",
+        preset="q8",
+        render_id=None,
+        music_plan=None,
+        seed=None,
+        render_timeout_s=None,
     ):
         submitted.append((theme, duration_s, energy, style))
         assert prompt_origin == "local"

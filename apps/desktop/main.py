@@ -23,6 +23,7 @@ from pathlib import Path
 import pixel_theme as console_theme
 from backend_runtime import workspace_pythonpath
 from console_settings import ConsoleSettingsDialog
+from generation_controls import GenerationControlsDialog, GenerationReportDialog
 from pixel_stage import DeckCard, NeonPanel, SpectrumWidget
 from pixel_theme import font, install_font
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, QUrl, Signal
@@ -42,7 +43,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -92,6 +95,14 @@ def panel() -> QFrame:
 
 class BackendClient(QWidget):
     status_received = Signal(dict)
+    models_received = Signal(dict)
+    batches_received = Signal(dict)
+    writers_received = Signal(dict)
+    writer_pending = Signal(bool)
+    generation_settings_received = Signal(dict)
+    intent_received = Signal(dict)
+    theme_pending = Signal(bool)
+    playback_pending = Signal(bool)
     health_changed = Signal(bool)
     action_finished = Signal(str, dict)
     problem = Signal(str)
@@ -102,6 +113,8 @@ class BackendClient(QWidget):
         self.network = QNetworkAccessManager(self)
         self.session_id: str | None = None
         self._pending_status = False
+        self._pending_theme = False
+        self._pending_playback_start = False
         self._poll = QTimer(self)
         self._poll.setInterval(400)
         self._poll.timeout.connect(self.poll)
@@ -147,8 +160,79 @@ class BackendClient(QWidget):
 
         self._request("GET", "/live", None, received)
 
-    def start_or_steer(self, theme: str, *, instrumental: bool | None = None) -> None:
+    def refresh_models(self) -> None:
+        def received(body, error):
+            if error:
+                self.problem.emit(f"Could not read music generators: {error}")
+            elif body:
+                self.models_received.emit(body)
+
+        self._request("GET", "/generation/models", None, received)
+
+    def refresh_batches(self) -> None:
+        def received(body, error):
+            if error:
+                self.problem.emit(f"Could not read saved batches: {error}")
+            elif body is not None:
+                self.batches_received.emit(body)
+
+        self._request("GET", "/generation/batches", None, received)
+
+    def refresh_writers(self) -> None:
+        def received(body, error):
+            if error:
+                self.problem.emit(f"Could not read prompt writers: {error}")
+            elif body is not None:
+                self.writers_received.emit(body)
+
+        self._request("GET", "/generation/writers", None, received)
+
+    def refresh_generation_settings(self) -> None:
+        def received(body, error):
+            if error:
+                self.problem.emit(f"Could not read generation settings: {error}")
+            elif body is not None:
+                self.generation_settings_received.emit(body)
+
+        self._request("GET", "/generation/settings", None, received)
+
+    def configure_writer(self, profile: dict) -> None:
+        def received(body, error):
+            self.writer_pending.emit(False)
+            if error:
+                self.problem.emit(f"Could not select prompt writer: {error}")
+                self.refresh_writers()
+                return
+            self.writers_received.emit(body or {})
+            self.action_finished.emit("writer", body or {})
+
+        self.writer_pending.emit(True)
+        self._request("POST", "/generation/writer", profile, received)
+
+    def resume_batch(self, batch_id: str) -> None:
+        def received(body, error):
+            if error:
+                self.problem.emit(f"Could not resume batch: {error}")
+                return
+            self.action_finished.emit("resume", body or {})
+            self.poll()
+
+        self._request(
+            "POST", f"/generation/batches/{batch_id}/resume", {"retry_failed": True}, received
+        )
+
+    def start_or_steer(
+        self,
+        theme: str,
+        *,
+        instrumental: bool | None = None,
+        generator: str | None = None,
+        generator_preset: str | None = None,
+        generation_settings: dict | None = None,
+    ) -> None:
         theme = theme.strip()
+        if self._pending_theme:
+            return
         if not theme:
             self.problem.emit("Enter a theme first.")
             return
@@ -160,6 +244,8 @@ class BackendClient(QWidget):
             action = "start"
 
         def received(body: dict | None, error: str | None) -> None:
+            self._pending_theme = False
+            self.theme_pending.emit(False)
             if error:
                 self.problem.emit(f"Could not set the theme: {error}")
                 return
@@ -168,14 +254,54 @@ class BackendClient(QWidget):
             self.action_finished.emit(action, body or {})
             self.poll()
 
-        self._request("POST", path, {"theme": theme, "instrumental": instrumental}, received)
+        payload = {
+            "theme": theme,
+            "instrumental": instrumental,
+            "generator": generator,
+            "generator_preset": generator_preset,
+            "generation_settings": generation_settings,
+        }
+
+        def previewed(body, error):
+            if error:
+                self._pending_theme = False
+                self.theme_pending.emit(False)
+                self.problem.emit(f"Check generation settings: {error}")
+                return
+            self.intent_received.emit(body)
+            self._request("POST", path, payload, received)
+
+        self._pending_theme = True
+        self.theme_pending.emit(True)
+        if generation_settings is not None:
+            self._request("POST", "/generation/preview", payload, previewed)
+        else:
+            self._request("POST", path, payload, received)
+
+    def start_playback(self) -> None:
+        if self._pending_playback_start:
+            return
+        self._pending_playback_start = True
+        self.playback_pending.emit(True)
+
+        def received(body: dict | None, error: str | None) -> None:
+            if error:
+                self.problem.emit(f"Could not start playback: {error}")
+            else:
+                self.status_received.emit(body or {})
+                self.action_finished.emit("playback_start", body or {})
+            self._pending_playback_start = False
+            self.playback_pending.emit(False)
+            self.poll()
+
+        self._request("POST", "/live/start", {}, received)
 
     def stop(self) -> None:
         def received(body: dict | None, error: str | None) -> None:
             if error:
                 self.problem.emit(f"Could not stop playback: {error}")
                 return
-            self.session_id = None
+            self.status_received.emit(body or {})
             self.action_finished.emit("stop", body or {})
             self.poll()
 
@@ -268,12 +394,12 @@ class BackendProcess:
 
 
 class DepotDialog(QDialog):
-    """Browse admitted YuE2 renders without touching the live audio engine."""
+    """Browse admitted generated tracks without touching the live audio engine."""
 
     def __init__(self, client: BackendClient, parent: QWidget) -> None:
         super().__init__(parent)
         self.client = client
-        self.setWindowTitle("VEXA // GENERATED DEPOT")
+        self.setWindowTitle("VEXA / MUSIC LIBRARY")
         self.setWindowIcon(parent.windowIcon())
         self.resize(900, 520)
         layout = window_layout(self, self)
@@ -287,6 +413,7 @@ class DepotDialog(QDialog):
         )
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["TITLE", "THEME", "LENGTH", "BPM", "STATE", "ASSET"])
+        self.table.setColumnHidden(5, True)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -406,9 +533,7 @@ class DepotDialog(QDialog):
         self.stop_preview()
 
         def received(_body, error) -> None:
-            self.message.setText(
-                f"Delete failed: {error}" if error else f"{title} moved to trash."
-            )
+            self.message.setText(f"Delete failed: {error}" if error else f"{title} moved to trash.")
             if not error:
                 self.refresh()
 
@@ -439,6 +564,19 @@ class VexaWindow(QMainWindow):
         self.setWindowIcon(application_icon())
         self.resize(1440, 900)
         self.setMinimumSize(720, 700)
+        self._model_catalog = {}
+        self._models_requested = False
+        self._resumable_batch_id = None
+        self._writer_catalog = []
+        self._selected_writer = None
+        self._writer_pending = False
+        self._theme_pending = False
+        self._playback_pending = False
+        self._api_online = preview
+        self._generation_preferences = None
+        self.generation_dialog = None
+        self.report_dialog = None
+        self.last_status = {}
         self.console_settings = None
         self._build()
         self.console_settings = ConsoleSettingsDialog(self, persist=not preview)
@@ -454,6 +592,14 @@ class VexaWindow(QMainWindow):
                 if self.backend.process is not None:
                     self.backend.process.finished.connect(self.on_backend_exit)
                 self.client = BackendClient(self.backend.url)
+                self.client.models_received.connect(self.on_models)
+                self.client.batches_received.connect(self.on_batches)
+                self.client.writers_received.connect(self.on_writers)
+                self.client.writer_pending.connect(self.on_writer_pending)
+                self.client.generation_settings_received.connect(self.on_generation_settings)
+                self.client.intent_received.connect(self.on_intent)
+                self.client.theme_pending.connect(self.on_theme_pending)
+                self.client.playback_pending.connect(self.on_playback_pending)
                 self.client.status_received.connect(self.on_status)
                 self.client.health_changed.connect(self.on_health)
                 self.client.action_finished.connect(self.on_action)
@@ -482,86 +628,132 @@ class VexaWindow(QMainWindow):
         outer = window_layout(self, root)
 
         header = QHBoxLayout()
-        masthead = label("V E X A // D E C K", size=20, color="#c9dcd8")
-        masthead.setWordWrap(False)
-        header.addWidget(masthead)
-        self.subtitle = label(":: AFTER_HOURS / RADIO ::", color="#b194df")
+        header.setSpacing(8)
+        self.masthead = label("VEXA // DECK", size=18, color="#c9dcd8", weight=700)
+        self.masthead.setWordWrap(False)
+        header.addWidget(self.masthead)
+        self.subtitle = label("AFTER HOURS / RADIO", size=9, color="#b194df")
         self.subtitle.setWordWrap(False)
         header.addWidget(self.subtitle)
         header.addStretch()
+        self.depot_button = button("LIBRARY", role="chip")
+        self.depot_button.setAccessibleName("Music library")
+        self.depot_button.setToolTip("Listen to and manage generated tracks")
+        self.depot_button.clicked.connect(self.open_depot)
+        header.addWidget(self.depot_button)
+        self.settings_button = button("EQ / THEME", role="chip")
+        self.settings_button.clicked.connect(self.show_console_settings)
+        header.addWidget(self.settings_button)
+        self.diagnostics_button = button("LOGS", role="chip")
+        self.diagnostics_button.clicked.connect(self.show_diagnostics)
+        header.addWidget(self.diagnostics_button)
         self.api_label = label("CONNECTING / HOST AUDIO", size=9, color="#748f96")
-        self.api_label.setMaximumWidth(210)
+        self.api_label.setMaximumWidth(160)
         header.addWidget(self.api_label)
-        self.live_label = label("OFF AIR", color="#748f96")
+        self.live_label = label("OFF AIR", size=10, color="#748f96", weight=700)
+        self.live_label.setWordWrap(False)
         header.addWidget(self.live_label)
         outer.addLayout(header)
 
         content = QHBoxLayout()
-        content.setSpacing(8)
+        content.setSpacing(12)
         outer.addLayout(content, 1)
-        left = panel()
-        left.setFixedWidth(240)
-        controls = QVBoxLayout(left)
+        self.session_panel = panel()
+        self.session_scroll = QScrollArea()
+        self.session_scroll.setFixedWidth(300)
+        self.session_scroll.setWidgetResizable(True)
+        self.session_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.session_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.session_scroll.setWidget(self.session_panel)
+        controls = QVBoxLayout(self.session_panel)
         self.controls_layout = controls
-        controls.setContentsMargins(18, 22, 18, 22)
-        controls.setSpacing(8)
-        controls.addWidget(label("[01] // SESSION", color="#63e6d2"))
-        self.session_title = label("SET THE\nATMOSPHERE_", size=16, color="#c9dcd8")
-        self.session_title.setFixedHeight(56)
+        controls.setContentsMargins(16, 18, 16, 18)
+        controls.setSpacing(10)
+        controls.addWidget(label("01 / YOUR SESSION", size=9, color="#63e6d2"))
+        self.session_title = label("Set the atmosphere", size=16, weight=700)
         controls.addWidget(self.session_title)
         self.theme_input = QLineEdit()
-        self.theme_input.setPlaceholderText("dark melodic techno...")
-        self.theme_input.setMinimumHeight(36)
+        self.theme_input.setPlaceholderText("Describe a sound or mood…")
+        self.theme_input.setMinimumHeight(40)
         self.theme_input.setAccessibleName("Theme or vibe")
+        self.theme_input.textChanged.connect(self.theme_input.setToolTip)
         self.theme_input.returnPressed.connect(self.submit_theme)
         controls.addWidget(self.theme_input)
         self.vocal_mode = QComboBox()
         self.vocal_mode.setAccessibleName("Music vocal mode")
-        self.vocal_mode.setMinimumHeight(30)
-        self.vocal_mode.addItem("AUTO / FOLLOW THEME", None)
-        self.vocal_mode.addItem("NO LYRICS / INSTRUMENTAL", True)
-        self.vocal_mode.addItem("WITH VOCALS", False)
-        self.vocal_mode.setToolTip(
-            "Auto follows your theme. No lyrics generates instrumental tracks and selects "
-            "instrumental depot matches. With vocals requests original lyrics. "
-            "Select the mode before starting or shifting the vibe."
-        )
+        self.vocal_mode.setMinimumHeight(34)
+        self.vocal_mode.addItem("Vocals: follow the theme", None)
+        self.vocal_mode.addItem("Instrumental / no lyrics", True)
+        self.vocal_mode.addItem("Sung vocals", "singing")
+        self.vocal_mode.addItem("Spoken rap", "rap")
+        self.vocal_mode.setToolTip("Choose the vocal mode before starting or changing the vibe.")
         controls.addWidget(self.vocal_mode)
         self.start_button = button("START THE SET", role="primary")
+        self.start_button.setMinimumHeight(40)
         self.start_button.clicked.connect(self.submit_theme)
         controls.addWidget(self.start_button)
-        quick_select_title = label("// QUICK SELECT", color="#748f96")
-        self.quick_select_widgets = [quick_select_title]
-        controls.addWidget(quick_select_title)
-        for theme in ("rain-soaked jazz", "dark melodic techno", "warm house"):
-            chip = button(
-                {
-                    "rain-soaked jazz": "RAIN-SOAKED JAZZ",
-                    "dark melodic techno": "MELODIC TECHNO",
-                    "warm house": "WARM HOUSE",
-                }[theme],
-                role="chip",
-            )
-            chip.clicked.connect(lambda checked=False, value=theme: self.choose_theme(value))
-            self.quick_select_widgets.append(chip)
-            controls.addWidget(chip)
-        controls.addSpacing(4)
-        controls.addWidget(label("// CURRENT VIBE", color="#abc78a"))
+        self.quick_select = QComboBox()
+        self.quick_select.setAccessibleName("Quick mood selection")
+        self.quick_select.addItem("Try a mood…", None)
+        for name, value in (
+            ("Rain-soaked jazz", "rain-soaked jazz"),
+            ("Dark melodic techno", "dark melodic techno"),
+            ("Warm house", "warm house"),
+        ):
+            self.quick_select.addItem(name, value)
+        self.quick_select.activated.connect(self._choose_quick_mood)
+        controls.addWidget(self.quick_select)
+        self.music_setup_button = button("MUSIC SETUP", role="chip")
+        self.music_setup_button.setToolTip("Models, prompt writer and detailed generation controls")
+        self.music_setup_button.clicked.connect(self.show_music_setup)
+        controls.addWidget(self.music_setup_button)
+        self.intent_label = label("10 tracks / full length", size=9, color="#748f96")
+        controls.addWidget(self.intent_label)
+        controls.addSpacing(6)
+        controls.addWidget(label("CURRENT DIRECTION", size=9, color="#abc78a"))
         self.theme_label = label("Awaiting your direction", color="#c9dcd8")
-        self.theme_label.setMaximumHeight(62)
+        self.theme_label.setMaximumHeight(48)
         controls.addWidget(self.theme_label)
-        self.message = label("Vexa is ready. Enter a vibe to prepare your set.", color="#748f96")
-        self.message.setMaximumHeight(98)
+        self.message = label("Enter a vibe to prepare your set.", size=10, color="#748f96")
+        self.message.setMaximumHeight(90)
         controls.addWidget(self.message)
-        controls.addWidget(label("// YUE2 TRACK BATCH", color="#b194df"))
-        self.generation_label = label("0 / 10 READY\nAwaiting a theme", color="#748f96")
+        controls.addSpacing(6)
+        controls.addWidget(label("02 / GENERATION", size=9, color="#b194df"))
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setAccessibleName("Tracks ready in current batch")
+        self.batch_progress.setRange(0, 10)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setTextVisible(False)
+        self.batch_progress.setFixedHeight(8)
+        controls.addWidget(self.batch_progress)
+        self.generation_label = label("0 / 10 READY / Awaiting a theme", size=9, color="#748f96")
         controls.addWidget(self.generation_label)
+        recovery = QHBoxLayout()
+        recovery.setSpacing(6)
+        self.resume_button = button("RETRY", role="chip")
+        self.resume_button.setToolTip("Resume the saved batch and retry failed slots")
+        self.resume_button.setEnabled(False)
+        self.resume_button.clicked.connect(self.resume_batch)
+        recovery.addWidget(self.resume_button)
+        self.track_reports_button = button("REPORTS", role="chip")
+        self.track_reports_button.setToolTip(
+            "Track plans, measured quality, failures and cancellation"
+        )
+        self.track_reports_button.clicked.connect(self.open_track_reports)
+        recovery.addWidget(self.track_reports_button)
+        controls.addLayout(recovery)
+        controls.addSpacing(6)
+        controls.addWidget(label("03 / UP NEXT", size=9, color="#63e6d2"))
+        self.next_asset = label("No transition prepared", size=12, weight=700)
+        self.next_asset.setMaximumHeight(52)
+        controls.addWidget(self.next_asset)
+        self.next_detail = label(
+            "Vexa prepares the next compatible record.", size=9, color="#748f96"
+        )
+        self.next_detail.setMaximumHeight(100)
+        controls.addWidget(self.next_detail)
         controls.addStretch()
-        self.motion_button = button("REDUCE MOTION", role="chip")
-        self.motion_button.setCheckable(True)
-        self.motion_button.toggled.connect(self.set_reduced_motion)
-        controls.addWidget(self.motion_button)
-        content.addWidget(left)
+        content.addWidget(self.session_scroll)
 
         center = QVBoxLayout()
         center.setSpacing(8)
@@ -577,141 +769,397 @@ class VexaWindow(QMainWindow):
         deck_row.addWidget(self.deck_a)
         deck_row.addWidget(self.deck_b)
         center.addLayout(deck_row)
+        self.spectrum = SpectrumWidget()
+        center.addWidget(self.spectrum)
 
-        # Secondary session information collapses at small widths. Core controls stay visible.
-        self.right_panel = panel()
-        self.right_panel.setFixedWidth(240)
-        details = QVBoxLayout(self.right_panel)
-        details.setContentsMargins(18, 22, 18, 22)
-        details.setSpacing(12)
-        details.addWidget(label("[02] // NEXT RECORD", color="#b194df"))
-        self.next_asset = label("No transition prepared", size=14, color="#c9dcd8")
-        details.addWidget(self.next_asset)
-        self.next_detail = label(
-            "Cue and compatibility checks prepare the next record.", color="#748f96"
-        )
-        details.addWidget(self.next_detail)
-        details.addSpacing(8)
-        details.addWidget(label("// EVENT HISTORY", color="#abc78a"))
+        self._build_music_setup()
+        self.diagnostics = QDialog(self)
+        self.diagnostics.setWindowTitle("VEXA / LOGS & ACTIVITY")
+        self.diagnostics.setWindowIcon(self.windowIcon())
+        self.diagnostics.resize(800, 600)
+        diagnostics_layout = window_layout(self.diagnostics, self.diagnostics)
+        self.summary_label = label("No session", size=10, color="#abc78a")
+        diagnostics_layout.addWidget(self.summary_label)
+        diagnostics_layout.addWidget(label("RECENT DECK MOVES", size=9, color="#b194df"))
         self.history_layout = QVBoxLayout()
-        self.history_layout.setSpacing(10)
-        details.addLayout(self.history_layout)
+        self.history_layout.setSpacing(6)
+        diagnostics_layout.addLayout(self.history_layout)
         self._history_widgets = []
         for _ in range(4):
-            widget = label("--", color="#748f96")
-            widget.setMaximumHeight(62)
+            widget = label("--", size=9, color="#748f96")
             self.history_layout.addWidget(widget)
             self._history_widgets.append(widget)
-        details.addStretch()
-        details.addWidget(label("// USER SIGNAL", color="#63e6d2"))
-        details.addWidget(label("Like a track? Your feedback is saved for Vexa.", color="#748f96"))
-        content.addWidget(self.right_panel)
-
-        # Keep the spectrum across the console beneath the video and deck area.
-        self.spectrum = SpectrumWidget()
-        outer.addWidget(self.spectrum)
-
-        self.diagnostics = QDialog(self)
-        self.diagnostics.setWindowTitle("VEXA / DIAGNOSTICS")
-        self.diagnostics.setWindowIcon(self.windowIcon())
-        self.diagnostics.resize(800, 480)
-        diagnostics_layout = window_layout(self.diagnostics, self.diagnostics)
-        diagnostics_layout.addWidget(label("SYSTEM / EVENT LOG", color="#63e6d2"))
-        self.summary_label = label("No session", color="#abc78a")
-        diagnostics_layout.addWidget(self.summary_label)
+        diagnostics_layout.addWidget(label("SYSTEM / EVENT LOG", size=9, color="#63e6d2"))
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.document().setMaximumBlockCount(1000)
         self.log_view.setAccessibleName("Detailed event log")
         self.log_view.setFont(font(10))
-        diagnostics_layout.addWidget(self.log_view)
-        diagnostics_layout.addWidget(label(str(self.log_path), color="#748f96"))
+        diagnostics_layout.addWidget(self.log_view, 1)
+        diagnostics_layout.addWidget(label(str(self.log_path), size=9, color="#748f96"))
 
         self.footer = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.footer.setSpacing(8)
         footer_status = QHBoxLayout()
-        footer_status.setSpacing(8)
-        self.transport = label("TRANSPORT / STANDBY", color="#abc78a")
+        self.transport = label("TRANSPORT / STANDBY", size=9, color="#abc78a")
         self.transport.setWordWrap(False)
         footer_status.addWidget(self.transport)
         footer_status.addStretch()
-        self.health = label("AUDIO / WAITING", color="#748f96")
+        self.health = label("AUDIO / WAITING", size=9, color="#748f96")
         self.health.setWordWrap(False)
         footer_status.addWidget(self.health)
         self.footer.addLayout(footer_status, 1)
-        footer_actions = QHBoxLayout()
-        footer_actions.setSpacing(8)
-        footer_actions.addStretch()
+        self.footer_actions = QHBoxLayout()
+        self.footer_actions.setSpacing(8)
         self.like_button, self.dislike_button = button("LIKE"), button("DISLIKE")
+        self.like_button.setToolTip("Save positive feedback on the current track")
+        self.dislike_button.setToolTip("Save negative feedback on the current track")
         self.like_button.clicked.connect(lambda: self.send_feedback("like"))
         self.dislike_button.clicked.connect(lambda: self.send_feedback("dislike"))
-        footer_actions.addWidget(self.like_button)
-        footer_actions.addWidget(self.dislike_button)
-        self.depot_button = button("DEPOT", role="chip")
-        self.depot_button.clicked.connect(self.open_depot)
-        footer_actions.addWidget(self.depot_button)
-        diagnostics_button = button("INFO", role="chip")
-        diagnostics_button.clicked.connect(self.show_diagnostics)
-        footer_actions.addWidget(diagnostics_button)
-        self.settings_button = button("EQ / THEME", role="chip")
-        self.settings_button.clicked.connect(self.show_console_settings)
-        footer_actions.addWidget(self.settings_button)
+        self.footer_actions.addWidget(self.like_button)
+        self.footer_actions.addWidget(self.dislike_button)
+        self.footer_actions.addStretch()
+        self.play_button = button("START", role="primary")
+        self.play_button.setAccessibleName("Start playback")
+        self.play_button.setToolTip("Start the set, restart stopped playback, or play ready music.")
+        self.play_button.clicked.connect(self.start_playback)
+        self.footer_actions.addWidget(self.play_button)
         self.stop_button = button("STOP", role="danger")
+        self.stop_button.setToolTip("Stop playback only. Music generation continues.")
         self.stop_button.clicked.connect(self.stop)
-        footer_actions.addWidget(self.stop_button)
-        self.footer.addLayout(footer_actions)
+        self.footer_actions.addWidget(self.stop_button)
+        self.footer.addLayout(self.footer_actions)
         outer.addLayout(self.footer)
         self._set_controls(False)
         self.start_button.setEnabled(self.preview)
+        self.setTabOrder(self.theme_input, self.vocal_mode)
+        self.setTabOrder(self.vocal_mode, self.start_button)
+        self.setTabOrder(self.start_button, self.quick_select)
+        self.setTabOrder(self.quick_select, self.music_setup_button)
+
+    def _build_music_setup(self):
+        self.music_setup = QDialog(self)
+        self.music_setup.setWindowTitle("VEXA / MUSIC SETUP")
+        self.music_setup.setWindowIcon(self.windowIcon())
+        self.music_setup.resize(570, 570)
+        self.music_setup.setMinimumSize(440, 450)
+        outer = window_layout(self.music_setup, self.music_setup)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body = QWidget()
+        body.setObjectName("generationSettingsBody")
+        scroll.setWidget(body)
+        settings = QVBoxLayout(body)
+        settings.setContentsMargins(18, 18, 18, 18)
+        settings.setSpacing(12)
+        settings.addWidget(label("SHAPE YOUR NEXT BATCH", size=16, weight=700))
+        settings.addWidget(
+            label(
+                "Choose the generator and prompt writer here. For length, tempo, lyrics, "
+                "arrangement and quality rules, open Detailed controls.",
+                size=10,
+                color="#748f96",
+            )
+        )
+        settings.addWidget(label("MUSIC GENERATOR", size=9, color="#63e6d2"))
+        self.generator_select = QComboBox()
+        self.generator_select.setAccessibleName("Music generator")
+        self.generator_select.setMinimumHeight(34)
+        for identity, name in (
+            ("yue2", "YuE2"),
+            ("acestep", "ACE-Step 1.5 Turbo"),
+            ("minimax", "MiniMax Music 3"),
+        ):
+            self.generator_select.addItem(name, identity)
+        settings.addWidget(self.generator_select)
+        settings.addWidget(label("MODEL PRESET", size=9, color="#748f96"))
+        self.generator_preset = QComboBox()
+        self.generator_preset.setAccessibleName("Generator quality preset")
+        self.generator_preset.setMinimumHeight(34)
+        settings.addWidget(self.generator_preset)
+        self.model_status = label("Checking installed models", size=9, color="#748f96")
+        settings.addWidget(self.model_status)
+        settings.addWidget(label("PROMPT WRITER", size=9, color="#b194df"))
+        self.writer_select = QComboBox()
+        self.writer_select.setAccessibleName("Prompt writer for new batches")
+        self.writer_select.setMinimumHeight(34)
+        self.writer_select.addItem("Checking writers...", None)
+        self.writer_select.setEnabled(False)
+        self.writer_select.setToolTip(
+            "Changes apply to new batches; existing batches retain their writer."
+        )
+        self.writer_select.currentIndexChanged.connect(self.on_writer_choice)
+        settings.addWidget(self.writer_select)
+        self.generation_controls_button = button("DETAILED CONTROLS", role="primary")
+        self.generation_controls_button.clicked.connect(self.open_generation_controls)
+        settings.addWidget(self.generation_controls_button)
+        self.motion_button = button("REDUCE MOTION", role="chip")
+        self.motion_button.setCheckable(True)
+        self.motion_button.toggled.connect(self.set_reduced_motion)
+        settings.addWidget(self.motion_button)
+        settings.addStretch()
+        outer.addWidget(scroll, 1)
+        done = button("DONE", role="chip")
+        done.clicked.connect(self.music_setup.hide)
+        outer.addWidget(done)
+        self.generator_select.currentIndexChanged.connect(self.on_generator_choice)
+        self.generator_preset.currentIndexChanged.connect(self.update_model_status)
+        self.on_generator_choice()
+
+    def _choose_quick_mood(self, index):
+        value = self.quick_select.itemData(index)
+        if value:
+            self.choose_theme(value)
+        self.quick_select.setCurrentIndex(0)
+
+    def show_music_setup(self):
+        self.music_setup.resize(min(570, self.width() - 40), min(570, self.height() - 40))
+        self.music_setup.show()
+        self.music_setup.raise_()
 
     def show_console_settings(self):
         self.console_settings.show()
         self.console_settings.raise_()
 
     def show_diagnostics(self):
+        self.diagnostics.resize(min(800, self.width() - 40), min(600, self.height() - 40))
         self.diagnostics.show()
         self.diagnostics.raise_()
 
     def resizeEvent(self, event):
-        if hasattr(self, "controls_layout"):
-            compact = self.height() < 760
-            self.controls_layout.setSpacing(6 if compact else 8)
+        compact = self.width() < 1000
+        if hasattr(self, "session_scroll"):
+            self.session_scroll.setFixedWidth(250 if compact else 300)
+            short = self.height() < 780
+            self.controls_layout.setSpacing(6 if short else 10)
             self.controls_layout.setContentsMargins(
-                18, 18 if compact else 22, 18, 18 if compact else 22
+                16, 14 if short else 18, 16, 14 if short else 18
             )
-            self.session_title.setText("SET THE VIBE_" if compact else "SET THE\nATMOSPHERE_")
-            self.session_title.setFixedHeight(30 if compact else 56)
+            self.message.setMaximumHeight(54 if short else 90)
+            self.next_detail.setMaximumHeight(56 if short else 100)
         if hasattr(self, "footer"):
             self.footer.setDirection(
-                QBoxLayout.Direction.TopToBottom
-                if self.width() < 1000
-                else QBoxLayout.Direction.LeftToRight
+                QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight
             )
-            self.subtitle.setVisible(self.width() >= 1000)
-        if hasattr(self, "right_panel"):
-            self.right_panel.setVisible(self.width() >= 1280)
-        if hasattr(self, "quick_select_widgets"):
-            for widget in self.quick_select_widgets:
-                widget.setVisible(self.height() >= 820)
+            self.subtitle.setVisible(self.width() >= 1200)
+            self.api_label.setVisible(self.width() >= 1000)
+        if hasattr(self, "spectrum"):
+            self.spectrum.setFixedHeight(110 if self.height() < 780 else 160)
         super().resizeEvent(event)
 
     def _set_controls(self, running: bool) -> None:
         self.like_button.setEnabled(running)
         self.dislike_button.setEnabled(running)
-        self.stop_button.setEnabled(running)
-        self.start_button.setText("[ SHIFT THE VIBE ]" if running else "[ START THE SET ]")
+        continuity = self.last_status.get("continuity") or {}
+        self.stop_button.setEnabled(
+            (running or bool(self.last_status.get("startup"))) and not continuity.get("stopped")
+        )
+        self.start_button.setText(
+            "[ SHIFT THE VIBE ]" if self.last_status.get("session_id") else "[ START THE SET ]"
+        )
+        self._update_play_button()
+
+    def _update_play_button(self) -> None:
+        waiting = bool((self.last_status.get("continuity") or {}).get("waiting"))
+        idle = not any(self.last_status.get(key) for key in ("running", "generating", "startup"))
+        self.play_button.setEnabled(
+            self._api_online
+            and not self._playback_pending
+            and not self._theme_pending
+            and not self._writer_pending
+            and (waiting or idle)
+        )
+
+    def on_playback_pending(self, pending: bool) -> None:
+        self._playback_pending = pending
+        self._update_play_button()
 
     def choose_theme(self, theme: str) -> None:
         self.theme_input.setText(theme)
         self.theme_input.setFocus()
 
+    def on_models(self, body: dict) -> None:
+        self._model_catalog = {row["id"]: row for row in body.get("models", [])}
+        selected = body.get("selected", {})
+        self.generator_select.blockSignals(True)
+        index = self.generator_select.findData(selected.get("generator", "yue2"))
+        if index >= 0:
+            self.generator_select.setCurrentIndex(index)
+        self.generator_select.blockSignals(False)
+        self.on_generator_choice()
+        index = self.generator_preset.findData(selected.get("preset"))
+        if index >= 0:
+            self.generator_preset.setCurrentIndex(index)
+        self._log("Music generator catalog loaded")
+
+    def on_writers(self, body: dict) -> None:
+        self._writer_catalog = body.get("writers", self._writer_catalog)
+        self._selected_writer = body.get("selected", self._selected_writer)
+        self.writer_select.blockSignals(True)
+        self.writer_select.clear()
+        for row in self._writer_catalog:
+            suffix = " / INSTALL FIRST" if row.get("available") is False else ""
+            self.writer_select.addItem(row["name"] + suffix, row["model"])
+        self.writer_select.addItem("Template / instrumental only", "none")
+        selected = (self._selected_writer or {}).get("model")
+        index = self.writer_select.findData(selected)
+        if index < 0 and selected:
+            self.writer_select.addItem(selected, selected)
+            index = self.writer_select.count() - 1
+        self.writer_select.setCurrentIndex(max(0, index))
+        self.writer_select.blockSignals(False)
+        self.writer_select.setEnabled(self._api_online and not self._writer_pending)
+
+    def on_writer_pending(self, pending: bool) -> None:
+        self._writer_pending = pending
+        self._update_play_button()
+        if not pending:
+            self.on_writers({})
+        self.writer_select.setEnabled(self._api_online and not pending)
+        self.start_button.setEnabled(self._api_online and not pending and not self._theme_pending)
+
+    def on_theme_pending(self, pending: bool) -> None:
+        self._theme_pending = pending
+        self._update_play_button()
+        self.start_button.setEnabled(self._api_online and not pending and not self._writer_pending)
+
+    def on_writer_choice(self, *_args) -> None:
+        if self.client is None or not self._selected_writer:
+            return
+        model = self.writer_select.currentData()
+        row = next((r for r in self._writer_catalog if r["model"] == model), None)
+        if row and row.get("available") is False:
+            self.on_problem("Install this writer in the private model depot first.")
+            self.on_writers({})
+            return
+        profile = {**self._selected_writer, "model": model, "digest": None}
+        profile.update(
+            mode=row["mode"] if row else "template",
+            provider="ollama",
+            base="http://127.0.0.1:11434" if row and row["mode"] == "remote" else "",
+        )
+        if model == "none":
+            profile.update(provider="none", mode="template")
+        self.client.configure_writer(profile)
+
+    def on_generator_choice(self, *_args) -> None:
+        identity = self.generator_select.currentData()
+        variants = {
+            "yue2": (("Q8", "q8"),),
+            "acestep": (("Turbo", "turbo"),),
+            "minimax": (
+                ("Balanced Q6 / Q8", "balanced"),
+                ("Quality Q8 / Q8", "quality"),
+                ("Compact Q5 / Q5", "compact"),
+            ),
+        }
+        self.generator_preset.blockSignals(True)
+        self.generator_preset.clear()
+        for name, preset in variants.get(identity, ()):
+            self.generator_preset.addItem(name, preset)
+        self.generator_preset.blockSignals(False)
+        self.update_model_status()
+
+    def update_model_status(self, *_args) -> None:
+        row = self._model_catalog.get(self.generator_select.currentData())
+        if row is None:
+            self.model_status.setText(
+                "Preview / checking installation" if self.preview else "Checking installed models"
+            )
+            return
+        preset = next(
+            (item for item in row["presets"] if item["id"] == self.generator_preset.currentData()),
+            None,
+        )
+        ready = preset is not None and preset["available"]
+        self.model_status.setText(
+            ("EXPERIMENTAL / READY" if row.get("experimental") else "READY · next batch")
+            if ready
+            else "NEEDS SETUP"
+        )
+        self.model_status.setToolTip(
+            (preset.get("reason") if preset else "Preset missing")
+            or "Current music keeps playing when the generator changes."
+        )
+
     def submit_theme(self) -> None:
+        if self._writer_pending:
+            self.on_problem("Wait for the writer selection to be saved.")
+            return
         if self.preview:
             self.message.setText("Preview mode: audio backend is not running.")
         elif self.client is not None:
-            self.client.start_or_steer(
-                self.theme_input.text(), instrumental=self.vocal_mode.currentData()
+            controls = (
+                dict(self._generation_preferences or {}) if self._generation_preferences else None
             )
+            mode = self.vocal_mode.currentData()
+            if controls is not None:
+                controls["vocal_mode"] = (
+                    "instrumental" if mode is True else mode if isinstance(mode, str) else "auto"
+                )
+            self.client.start_or_steer(
+                self.theme_input.text(),
+                instrumental=mode if isinstance(mode, bool) else None,
+                generator=self.generator_select.currentData(),
+                generator_preset=self.generator_preset.currentData(),
+                generation_settings=controls,
+            )
+
+    def on_generation_settings(self, body: dict) -> None:
+        self._generation_preferences = body.get("selected", self._generation_preferences)
+        controls = self._generation_preferences or {}
+        mode = {"auto": None, "instrumental": True, "singing": "singing", "rap": "rap"}
+        self.vocal_mode.setCurrentIndex(
+            max(0, self.vocal_mode.findData(mode.get(controls.get("vocal_mode"))))
+        )
+        duration = controls.get("duration_s")
+        length = f"{duration:g}s" if duration else "165-178.5s"
+        self.intent_label.setText(
+            f"{controls.get('track_count', 10)} tracks / {length}"
+            f" / {controls.get('start_policy', 'depot')}"
+        )
+
+    def on_intent(self, body: dict) -> None:
+        plan = body["plan"]
+        intent = plan["intent"]
+        self.intent_label.setText(
+            f"{intent['genre']} / {intent['vocal_mode']}\n"
+            f"{body['controls']['track_count']} x {plan['duration_s']:g}s / {intent['bpm']:g} BPM"
+        )
+        self.intent_label.setToolTip(
+            "\n".join(body.get("warnings", [])) or body["semantic_evidence"]
+        )
+
+    def open_generation_controls(self) -> None:
+        if self.client is None or not self._selected_writer or self._generation_preferences is None:
+            self.on_problem("Generation controls need the connected backend and writer settings.")
+            return
+        if self.generation_dialog is None:
+            self.generation_dialog = GenerationControlsDialog(self)
+        self.generation_dialog.sync(self._generation_preferences, self._selected_writer)
+        self.generation_dialog.resize(min(650, self.width() - 40), min(730, self.height() - 40))
+        self.generation_dialog.show()
+        self.generation_dialog.raise_()
+
+    def open_track_reports(self) -> None:
+        if self.client is None:
+            self.on_problem("Track reports need the connected backend.")
+            return
+        if self.report_dialog is None:
+            self.report_dialog = GenerationReportDialog(self)
+        self.report_dialog.refresh()
+        self.report_dialog.resize(min(830, self.width() - 40), min(710, self.height() - 40))
+        self.report_dialog.show()
+        self.report_dialog.raise_()
+
+    def start_playback(self) -> None:
+        if self.client is None:
+            return
+        if (self.last_status.get("continuity") or {}).get("waiting"):
+            self.client.start_playback()
+        else:
+            self.submit_theme()
 
     def stop(self) -> None:
         if self.client is not None:
@@ -724,6 +1172,7 @@ class VexaWindow(QMainWindow):
         if self.depot_dialog is None:
             self.depot_dialog = DepotDialog(self.client, self)
         self.depot_dialog.refresh()
+        self.depot_dialog.resize(min(900, self.width() - 40), min(520, self.height() - 40))
         self.depot_dialog.show()
         self.depot_dialog.raise_()
 
@@ -739,8 +1188,23 @@ class VexaWindow(QMainWindow):
         self.motion_button.setText("[ MOTION OFF ]" if enabled else "[ REDUCE MOTION ]")
 
     def on_health(self, online: bool) -> None:
+        self._api_online = online
         self.console_settings.set_online(online)
-        self.start_button.setEnabled(online)
+        if online and not self._models_requested and self.client is not None:
+            self._models_requested = True
+            self.client.refresh_models()
+            self.client.refresh_batches()
+            self.client.refresh_writers()
+            self.client.refresh_generation_settings()
+        if not online:
+            self._models_requested = False
+        self.start_button.setEnabled(
+            online and not self._writer_pending and not self._theme_pending
+        )
+        self._update_play_button()
+        self.writer_select.setEnabled(
+            online and not self._writer_pending and self._selected_writer is not None
+        )
         self.api_label.setText("API / CONNECTED" if online else "API / CONNECTING")
         self.api_label.setStyleSheet(
             "color: #63e6d2; background: transparent;"
@@ -762,25 +1226,54 @@ class VexaWindow(QMainWindow):
         )
         self.api_label.setText("AUDIO BACKEND OFFLINE")
         self.start_button.setEnabled(False)
+        self._api_online = False
+        self._update_play_button()
 
     def on_action(self, action: str, data: dict) -> None:
         self._log(f"ACTION {action} {json.dumps(data, default=str)[:500]}")
         if action == "stop":
             self.started_at = None
-            self.message.setText("Audio stopped. Vexa is standing by.")
+            self.message.setText(
+                "Playback stopped. Generation continues. Press START to play again."
+            )
         elif action == "feedback":
             self.message.setText("Feedback saved for later Laya training.")
+        elif action == "resume":
+            self.message.setText("Resuming saved batch. Accepted tracks are reused.")
+        elif action == "playback_start":
+            if self.started_at is None:
+                self.started_at = time.monotonic()
+            self.message.setText("Playing generated music. Your batch continues in the background.")
+        elif action == "writer":
+            self.message.setText("Prompt writer saved for new batches. Current playback continues.")
         elif action in {"start", "theme"}:
             if self.started_at is None:
                 self.started_at = time.monotonic()
             self.message.setText(
-                "Vexa is finding full-length matches and starting a 10-track YuE2 batch."
+                "Vexa is preparing your set with the selected generation settings."
                 if action == "start"
                 else "New direction received. The current track keeps playing."
             )
         self.message.setStyleSheet("color: #90b2b7; background: transparent;")
 
+    def on_batches(self, data: dict) -> None:
+        batch = next((row for row in data.get("batches", []) if row["state"] != "completed"), None)
+        if batch:
+            self._resumable_batch_id = batch["id"]
+            self.resume_button.setToolTip(
+                f"Saved batch: {batch['theme']}\n{batch['completed']} / {batch['target']} ready"
+            )
+            self.resume_button.setEnabled(True)
+
+    def resume_batch(self) -> None:
+        if self.client is not None and self._resumable_batch_id:
+            self.resume_button.setEnabled(False)
+            self.client.resume_batch(self._resumable_batch_id)
+
     def on_status(self, status: dict) -> None:
+        self.last_status = status
+        if self.report_dialog is not None and self.report_dialog.isVisible():
+            self.report_dialog.update_actions()
         self.console_settings.sync_equalizer(
             (status.get("audio") or {}).get("equalizer"), running=bool(status.get("running"))
         )
@@ -805,20 +1298,39 @@ class VexaWindow(QMainWindow):
         completed = int(generation.get("completed") or 0)
         failed = int(generation.get("failed") or 0)
         current = int(generation.get("current") or 0)
+        target = max(1, int(generation.get("target") or 10))
+        self.batch_progress.setRange(0, target)
+        self.batch_progress.setValue(min(completed, target))
+        self.batch_progress.setToolTip(f"{completed} of {target} generated tracks are ready")
         origin = generation.get("prompt_origin") or "planning"
+        rows = generation.get("tracks") or []
+        if generation.get("batch_id"):
+            resumable = completed < generation.get("target", 10)
+            self._resumable_batch_id = generation["batch_id"] if resumable else None
+        self.resume_button.setEnabled(bool(self._resumable_batch_id) and not generating)
+        stage = str(generation.get("stage") or "planning").replace("_", " ")
         self.generation_label.setText(
             f"{completed} / {generation.get('target', 10)} READY  /  "
-            f"{failed} FAILED\n"
+            f"{generation.get('rejected', 0)} REJECTED\n{failed} FAILED ATTEMPTS\n"
             + (
-                f"Rendering track {current}  /  {origin}"
-                if current
-                else "Writing music plan..."
+                f"{stage.upper()} {current or ''}  /  {origin}"
                 if generating
                 else "Batch complete"
+                if completed == generation.get("target", 10)
+                else "Batch incomplete / resume available"
                 if completed or failed
+                else "Generation cancelled / start or resume"
+                if stage == "interrupted"
                 else "Planning failed / retry set"
                 if status.get("error")
                 else "Awaiting a theme"
+            )
+        )
+        self.generation_label.setToolTip(
+            "\n".join(
+                f"{row['slot']:02} {row['state']}: {row.get('title') or 'Untitled'}"
+                + (f" — {row['error']}" if row.get("error") else "")
+                for row in rows
             )
         )
         if self.client is not None:
@@ -834,6 +1346,7 @@ class VexaWindow(QMainWindow):
             else "color: #748f96; background: transparent;"
         )
         self.theme_label.setText(status.get("theme") or "Awaiting your first direction")
+        self.theme_label.setToolTip(self.theme_label.text())
         upcoming = status.get("prepared_asset_id")
         self.next_asset.setText(
             status.get("prepared_title") or "Next track ready"
@@ -847,8 +1360,40 @@ class VexaWindow(QMainWindow):
             if upcoming
             else "Generation runs in the background while music continues."
             if generating
-            else "Vexa will hold the current track until a safe match is ready."
+            else "Vexa will finish the current track and wait for a safe match."
         )
+        continuity = status.get("continuity") or {}
+        if continuity:
+            secured = int(continuity.get("secured_s") or 0)
+            self.next_detail.setText(
+                self.next_detail.text()
+                + f"\nBUFFER {secured // 60:02d}:{secured % 60:02d} / secured"
+                + (
+                    "\nSupply slower than buffer / preparing music"
+                    if continuity.get("shortfall")
+                    else ""
+                )
+            )
+            self.next_detail.setToolTip(
+                f"Conditional inventory: {continuity.get('conditional_inventory_s', 0):.0f}s. "
+                f"{continuity.get('assumption', '')}\n"
+                f"Preparation misses: {continuity.get('preparation_misses', 0)}. "
+                "Repeat policy: never within this set."
+            )
+            if continuity.get("stopped"):
+                self.live_label.setText("STOPPED")
+                self.next_asset.setText("Playback stopped")
+                self.next_detail.setText(
+                    "Generation continues. Press START to restart the current track."
+                    if status.get("current_asset_id")
+                    else "Generation continues. Press START when a generated track is ready."
+                )
+            elif continuity.get("waiting"):
+                self.live_label.setText("WAITING")
+                self.next_asset.setText("Waiting for verified music")
+                self.next_detail.setText(
+                    "Playback is silent. Press START to play ready generated music."
+                )
         self.summary_label.setText(
             f"{self.theme_label.text()}\n{self.next_asset.text()} / {self.next_detail.text()}\n"
             f"{self.generation_label.text()}"
@@ -877,7 +1422,8 @@ class VexaWindow(QMainWindow):
         events = [
             event
             for event in status.get("events") or []
-            if event.get("event") in {"start", "transition", "generated", "generation_failed"}
+            if event.get("event")
+            in {"start", "resume", "transition", "generated", "generation_failed"}
         ]
         for widget, event in zip(self._history_widgets, reversed(events[-4:]), strict=False):
             name = event.get("title") or titles.get(event.get("asset_id"))
@@ -888,15 +1434,38 @@ class VexaWindow(QMainWindow):
         error = status.get("error")
         if error:
             if error != self._last_status_error:
-                self.on_problem(error)
+                if status.get("error_kind") == "batch_warning":
+                    self._log(f"BATCH WARNING {error}")
+                    self.message.setText("Batch paused or incomplete: " + error)
+                    self.message.setStyleSheet("color: #abc78a; background: transparent;")
+                else:
+                    self.on_problem(error)
         elif self._last_status_error:
             self.message.setText(
-                "Preparing your music plan and tracks..." if generating
-                else "Vexa is playing your set." if running
+                "Preparing your music plan and tracks..."
+                if generating
+                else "Vexa is playing your set."
+                if running
                 else "Vexa is ready. Enter a vibe to prepare your set."
             )
             self.message.setStyleSheet("color: #90b2b7; background: transparent;")
         self._last_status_error = error
+        startup = status.get("startup")
+        if startup and generating and not error and not continuity.get("stopped"):
+            self.message.setText(
+                f"Waiting for {startup['policy']}: {startup['ready']} / "
+                f"{startup['required']} prepared tracks."
+            )
+            eta = continuity.get("startup_eta_s")
+            self.message.setText(
+                self.message.text()
+                + (
+                    f" Estimated wait: {int(eta) // 60}m {int(eta) % 60}s (measured history)."
+                    if eta is not None
+                    else " ETA unknown: measuring this generator."
+                )
+            )
+        self.message.setToolTip(self.message.text())
         elapsed = int(time.monotonic() - self.started_at) if self.started_at else 0
         self.transport.setText(
             f"TRANSPORT / {elapsed // 60:02d}:{elapsed % 60:02d}"
@@ -914,7 +1483,13 @@ class VexaWindow(QMainWindow):
                 f"generating={generating}"
             )
         self._last_audio_underruns = underruns
-        self.health.setText(f"AUDIO / {underruns} XRUN")
+        self.health.setText(
+            "AUDIO / STOPPED"
+            if continuity.get("stopped")
+            else "AUDIO / WAITING"
+            if continuity.get("waiting")
+            else f"AUDIO / {underruns} XRUN"
+        )
         self.health.setToolTip(
             f"{underruns} underruns / {stats.get('queue_dropped', 0)} dropped / "
             f"{float(device.get('latency_s', 0)) * 1000:.0f} ms buffer"
@@ -944,8 +1519,10 @@ class VexaWindow(QMainWindow):
             },
             "current_title": "Neon Circuit Reverie",
             "prepared_title": "Afterhours Voltage Drift",
-            "asset_titles": {"live-92efb7f7f5ea": "Neon Circuit Reverie",
-                             "live-a4e26849bf03": "Afterhours Voltage Drift"},
+            "asset_titles": {
+                "live-92efb7f7f5ea": "Neon Circuit Reverie",
+                "live-a4e26849bf03": "Afterhours Voltage Drift",
+            },
             "current_asset_id": "live-92efb7f7f5ea",
             "prepared_asset_id": "live-a4e26849bf03",
             "prepared_loaded": True,

@@ -19,6 +19,7 @@ class SourceType(StrEnum):
     """Where an asset came from. ``ARCHITECTURE.md:44``."""
 
     YUE2_RENDER = "yue2_render"
+    GENERATED_RENDER = "generated_render"
     REVISED_RENDER = "revised_render"
     USER_IMPORT = "user_import"
     STEM_SEPARATION = "stem_separation"

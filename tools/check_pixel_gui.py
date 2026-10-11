@@ -44,7 +44,6 @@ def main_check():
         # can retain the current size when a mapped window requests a resize.
         window = main.VexaWindow(preview=True)
         window.resize(width, height)
-        window.right_panel.setVisible(width >= 1280)
         window.show()
         window.spectrum.values = window.spectrum.target.copy()
         app.processEvents()
@@ -60,15 +59,16 @@ def main_check():
         assert window.stop_button.isVisible() and window.theme_input.isVisible()
         assert window.theme_input.height() >= 36
         assert window.depot_button.isVisible() and window.like_button.isVisible()
-        assert window.right_panel.isVisible() == (width >= 1280)
+        assert not hasattr(window, "right_panel")
+        assert window.next_asset.isVisible()
         assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
         assert window.title_bar.isVisible()
         assert window.title_bar.close_button.isVisible()
         assert window.stage.geometry() == window.video_slot.rect()
         assert window.stage.mapTo(window, QPoint()).x() == window.deck_a.mapTo(window, QPoint()).x()
         assert window.stop_button.mapTo(window, QPoint()).x() + window.stop_button.width() <= width
-        assert window.spectrum.height() == 160
-        assert window.spectrum.width() == window.centralWidget().width() - 24
+        assert window.spectrum.height() == (110 if height < 780 else 160)
+        assert window.spectrum.width() == window.video_panel.width()
         spectrum_top = window.spectrum.mapTo(window, QPoint()).y()
         assert spectrum_top > window.deck_a.mapTo(window, QPoint()).y() + window.deck_a.height()
         report["layouts"].append(

@@ -20,6 +20,36 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "third_party/ACE-Step-1.5"
 CHECKPOINTS = ROOT / "models/acestep-audio"
 CASES = {
+    "memphis": (
+        88,
+        "F minor",
+        "Global Metadata\n"
+        "Basic Attributes: 88 BPM, F minor, 4/4. Instrumental Memphis phonk, "
+        "1990s underground Southern hip-hop cassette beat. A slow, sinister, "
+        "head-nodding pocket with relaxed swing and heavy low-end weight.\n"
+        "Emotional Progression: Menacing and hypnotic throughout, intimate, nocturnal, "
+        "raw and restrained. Build interest through sample cuts and drum variations.\n"
+        "Sonics and Production: Low-fidelity sampler texture, dusty cassette hiss, "
+        "warm tape saturation, slightly unstable pitch, dark low-pass filtering. "
+        "Dry close drums, narrow sampled melody and a centered rounded sub bass.\n"
+        "Vocal Details\n"
+        "Entirely instrumental. The lead hook is a chopped minor-key keyboard sample; "
+        "all motifs are played by instruments. No singing, rapping, speech or vocal samples.\n"
+        "Arrangement\n"
+        "Primary Layer: A short original two-bar haunted electric-piano loop, "
+        "pitched down and chopped into uneven sampler slices, repeats hypnotically. "
+        "A low detuned bell answers the piano occasionally; the piano remains the lead.\n"
+        "Groove and Foundation: Sparse syncopated drum-machine kick, low snappy snare "
+        "on beats two and four, swung closed hi-hats and occasional short open hats. "
+        "Deep sustained 808 notes follow the kick with occasional subtle pitch glides. "
+        "Leave space between drum hits and retain the slow head-nod pulse.\n"
+        "Timeline: Begin with eight bars of filtered piano and sparse drums. "
+        "Introduce full drums and sub bass, then alternate sixteen-bar beat sections "
+        "with brief four-bar sample breaks. Add small snare fills, mute individual "
+        "sample slices and change bass notes between sections. Keep the beat rolling "
+        "for the full track. Finish with eight bars of drums and filtered piano. "
+        "The structure stays loop-driven and low-key, with a consistent cassette aesthetic.",
+    ),
     "phonk": (
         140,
         "F minor",

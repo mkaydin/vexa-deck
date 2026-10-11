@@ -20,7 +20,7 @@ def test_generated_depot_lists_streams_and_guards_delete(tmp_path):
         beat_grid=SimpleNamespace(bpm=122.0),
         provenance=SimpleNamespace(source_prompt="warm piano house"),
     )
-    asset = SimpleNamespace(manifest=manifest, path=wav)
+    asset = SimpleNamespace(manifest=manifest, path=wav, vibe={})
 
     class Depot:
         def __init__(self):

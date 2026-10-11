@@ -1,7 +1,7 @@
 """Audio analysis.
 
 Everything here runs at **ingestion**, never in the audio callback (``ARCHITECTURE.md:89``). The
-loudness and peak measurements are implemented directly in numpy so they are deterministic,
+loudness and peak measurements use NumPy/SciPy so they are deterministic,
 dependency-light, and testable without loading a model.
 
 Two rules shape this module:
@@ -11,9 +11,9 @@ Two rules shape this module:
 * **Silence and clipping are caught here, not discovered during a set.** An asset that fails a
   gate must never reach the scheduler (``ARCHITECTURE.md:46``).
 
-Channel handling is explicit throughout: every measurement reduces to mono *before* resampling.
-That ordering matters — ``shape[-1]`` on a ``(n, channels)`` array is the channel count, so a
-resample helper that assumes 1-D will quietly resample the wrong axis.
+Loudness sums independently weighted channel powers; peaks use the maximum across channels.
+Only musical timing/pitch analysis uses the channel mean. Resampling always follows the
+sample axis, preventing stereo phase cancellation from hiding unsafe peaks or silent files.
 """
 
 from __future__ import annotations
@@ -78,6 +78,7 @@ class LoudnessMeasurement:
     #: 64.9 LU over the whole file but 8.9 LU once the fades were dropped.
     loudness_range_lu: float
 
+
 @dataclass(frozen=True, slots=True)
 class TemporalAnalysis:
     """Estimated, not measured. Every field carries how much to trust it."""
@@ -90,7 +91,6 @@ class TemporalAnalysis:
     section_bars: list[int] = field(default_factory=list)
     #: Whether a beat-aligned loop could be cut at all.
     has_stable_grid: bool = False
-
 
 
 # --- channel and rate handling ----------------------------------------------
@@ -106,15 +106,12 @@ def _mono(samples: np.ndarray) -> np.ndarray:
     return samples if samples.ndim == 1 else samples.mean(axis=-1)
 
 
-
 def _resample_1d(samples: np.ndarray, sr: int, target: int = REFERENCE_RATE) -> np.ndarray:
     """Resample a **1-D** signal. Reduce channels before calling."""
     if sr == target:
         return samples
     if samples.ndim != 1:
-        raise ValueError(
-            f"expected a 1-D signal, got shape {samples.shape}; reduce channels first"
-        )
+        raise ValueError(f"expected a 1-D signal, got shape {samples.shape}; reduce channels first")
     n_out = round(samples.shape[0] / sr * target)
     if n_out < 1:
         return samples
@@ -130,20 +127,11 @@ def _mono_at_reference(samples: np.ndarray, sr: int) -> np.ndarray:
 def _biquad(samples: np.ndarray, b: np.ndarray, a: np.ndarray) -> np.ndarray:
     """Direct-form-I biquad.
 
-    A Python loop, deliberately: these buffers are a few hundred thousand samples at ingestion
-    time and never on a realtime path, so clarity beats a compiled dependency here.
+    Compiled SciPy filtering keeps three-minute ingestion passes bounded in CPU time.
     """
-    out = np.empty_like(samples)
-    x1 = x2 = y1 = y2 = 0.0
-    b0, b1, b2 = float(b[0]), float(b[1]), float(b[2])
-    a1, a2 = float(a[1]), float(a[2])
-    for n in range(samples.shape[0]):
-        x0 = float(samples[n])
-        y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
-        out[n] = y0
-        x2, x1 = x1, x0
-        y2, y1 = y1, y0
-    return out
+    from scipy.signal import lfilter
+
+    return lfilter(b, a, samples)
 
 
 def k_weight(samples: np.ndarray, sr: int = REFERENCE_RATE) -> np.ndarray:
@@ -166,7 +154,10 @@ def measure_loudness(
     whatever survived the absolute gate. Without the relative gate a long quiet tail drags the
     integrated figure down and a quiet track is misreported as loud.
     """
-    weighted = k_weight(samples, sr)
+    channels = samples[:, None] if samples.ndim == 1 else samples
+    # Sum independently K-weighted channel powers. Averaging waveforms erases
+    # opposite-phase stereo and understates identical-channel power by 3 dB.
+    weighted = np.stack([k_weight(channels[:, ch], sr) for ch in range(channels.shape[1])], axis=1)
     if weighted.shape[0] == 0:
         return LoudnessMeasurement(-np.inf, -np.inf, 0.0)
 
@@ -178,7 +169,7 @@ def measure_loudness(
 
     starts = range(0, weighted.shape[0] - block + 1, step)
     powers = np.array(
-        [float(np.mean(np.square(weighted[s : s + block]))) for s in starts]
+        [float(np.mean(np.sum(np.square(weighted[s : s + block]), axis=1))) for s in starts]
     )
     if powers.size == 0:
         return LoudnessMeasurement(-np.inf, -np.inf, 0.0)
@@ -220,16 +211,24 @@ def measure_true_peak(samples: np.ndarray, sr: int, *, oversample: int = 4) -> f
 
     Sample peaks under-report intersample overshoot, which is exactly where a crossfade clips.
     """
-    mono = _mono_at_reference(samples, sr)
-    if mono.size == 0:
+    from scipy.signal import resample_poly
+
+    if samples.size == 0:
         return -np.inf
     if oversample > 1:
-        n_up = mono.shape[0] * oversample
-        target = np.linspace(0, mono.shape[0] - 1, n_up)
-        upsampled = np.interp(target, np.arange(mono.shape[0]), mono)
-        peak = float(np.max(np.abs(upsampled)))
+        # Never average stereo peaks: opposite-phase channels still clip independently.
+        # Filter bounded blocks with context so a three-minute file does not allocate
+        # a full oversampled stereo copy. Discard block-edge filter transients.
+        peak = 0.0
+        block, context = sr * 5, 64
+        for start in range(0, len(samples), block):
+            end = min(start + block, len(samples))
+            left, right = max(0, start - context), min(len(samples), end + context)
+            upsampled = resample_poly(samples[left:right], oversample, 1, axis=0)
+            core = upsampled[(start - left) * oversample : (end - left) * oversample]
+            peak = max(peak, float(np.max(np.abs(core))))
     else:
-        peak = float(np.max(np.abs(mono)))
+        peak = float(np.max(np.abs(samples)))
     return 20.0 * np.log10(max(peak, 1e-12))
 
 
@@ -246,10 +245,12 @@ def probe_audio(path: str | Path) -> tuple[AudioProbe, np.ndarray]:
     except Exception as exc:
         raise AnalysisError(f"cannot decode {path}: {exc}") from exc
 
+    if not np.isfinite(samples).all():
+        raise AnalysisError(f"nonfinite audio samples in {path}")
+
     channels = int(samples.shape[1]) if samples.ndim == 2 and samples.shape[1] else 1
-    mono = _mono(samples)
     clipped = float(np.mean(np.abs(samples) >= 0.999)) if samples.size else 0.0
-    rms = float(np.sqrt(np.mean(np.square(mono)))) if mono.size else 0.0
+    rms = float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
 
     probe = AudioProbe(
         path=str(path),

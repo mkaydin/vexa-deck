@@ -18,20 +18,39 @@ _VOCAL = re.compile(
 )
 _VOICE_TERM = (
     r"(?:lyrics?|vocals?|vocalists?|singers?|singing|sung(?:\s+(?:choruses?|melodies?))?"
-    r"|rapping|humming|chants?|chanting|voices?|spoken\s+(?:words|verses?|refrains?)"
+    r"|rapping|humming|chants?|chanting|voices?|speech|spoken\s+(?:words|verses?|refrains?)"
     r"|rap\s+(?:verses?|refrains?|delivery|samples?|chops?)|MC\s+delivery|ad[ -]?libs?"
     r"|vocali[sz](?:ing|ations?))"
 )
 _DELIVERY = re.compile(r"\b" + _VOICE_TERM + r"\b|\bvocal\s+performance\b", re.I)
+_INSTRUMENT_VOICE = re.compile(r"\binstrumental\s+voices?\b", re.I)
+_INSTRUMENT_ROLE = re.compile(
+    r"(?P<context>\b(?:synthesizer|synth|piano|guitar|bass|saxophone|strings|"
+    r"instrumental\s+(?:element|motif|lead|part))\b"
+    r"[^.!?\n]{0,100}?\b(?:(?:acts?|serves?|functions?|acting|serving|functioning)"
+    r"\s+as|is)\s+(?:the\s+)?"
+    r"(?:(?:primary|main|lead|melodic)\s+){0,2})voices?\b",
+    re.I,
+)
 # Consume a complete negative list before checking for positive vocal directions.
 # 'No vocals, singing or humming' is one exclusion, not three independent requests.
 _NEGATED_ITEM = (
-    r"(?:(?:male|female|any|human|chopped|sampled)\s+)*" + _VOICE_TERM
-    + r"(?:\s+(?:samples?|chops?|hooks?|melody|delivery|performance))?"
+    r"(?:(?:male|female|any|human|chopped|sampled)\s+)*"
+    + r"(?:"
+    + _VOICE_TERM
+    + r"|backing(?:\s+vocals?)?|effects\s+applied\s+to\s+vocals?"
+    + r"|(?:EDM|pop|melodic)\s+(?:drops?|breaks?))"
+    + r"(?:\s+(?:samples?|chops?|hooks?|melody|delivery|performance|elements?|effects|"
+    r"parts?|layers?|material))?"
 )
 _NEGATED_DELIVERY = re.compile(
-    r"\b(?:no|without|avoid|exclude|excluding)\s+" + _NEGATED_ITEM
-    + r"(?:\s*(?:,|and|or|/)\s*" + _NEGATED_ITEM + r")*\b", re.I,
+    r"\b(?:no|without|avoid(?:ing)?|exclude|excluding)\s+"
+    + r"(?:(?:introducing|adding|using|including)\s+)?"
+    + _NEGATED_ITEM
+    + r"(?:\s*(?:,\s*(?:(?:and|or)\s+)?|(?:and|or|/)\s*)"
+    + _NEGATED_ITEM
+    + r")*\b",
+    re.I,
 )
 
 
@@ -43,7 +62,9 @@ def instrumental_details(style: str) -> tuple[str, list[str]]:
     """
     kept, removed = [], []
     for sentence in re.split(r"(?<=[.!?;])\s+|\n+", style.strip()):
-        (removed if _DELIVERY.search(sentence) else kept).append(sentence)
+        (removed if _DELIVERY.search(_instrument_voice_context(sentence)) else kept).append(
+            sentence
+        )
     return " ".join(kept).strip(), removed
 
 
@@ -82,4 +103,11 @@ def apply_instrumental_mode(theme: str, instrumental: bool | None) -> str:
 
 def has_vocal_delivery(style: str) -> bool:
     """Detect audible vocal directions without mistaking 'no vocals' for one."""
-    return bool(_DELIVERY.search(_SILENT.sub(" ", _NEGATED_DELIVERY.sub(" ", style))))
+    body = _instrument_voice_context(_SILENT.sub(" ", _NEGATED_DELIVERY.sub(" ", style)))
+    return bool(_DELIVERY.search(body))
+
+
+def _instrument_voice_context(text: str) -> str:
+    # Replace only the metaphorical word, retaining the rest of the sentence so
+    # an actual singer or vocal sample in the same sentence is still detected.
+    return _INSTRUMENT_ROLE.sub(r"\g<context>instrumental lead", _INSTRUMENT_VOICE.sub(" ", text))

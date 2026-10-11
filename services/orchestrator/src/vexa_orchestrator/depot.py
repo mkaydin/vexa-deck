@@ -15,6 +15,8 @@ from pathlib import Path
 
 from vexa_contracts import AssetManifest
 
+from .audio_evidence import load_evidence
+from .generation_settings import MARKER
 from .track_titles import hydrate_title
 from .vocal_intent import has_vocal_delivery, vocal_intent
 
@@ -113,6 +115,7 @@ class Depot:
                 manifest = AssetManifest.model_validate_json(manifest_path.read_text())
                 if not manifest.admissible():
                     continue
+                self.normalize_legacy_intent(manifest)
                 tags = " ".join(tag.value for group in manifest.tags.values() for tag in group)
                 words = frozenset(
                     _tokens(
@@ -123,6 +126,15 @@ class Depot:
                 vibe = json.loads(vibe_path.read_text()) if vibe_path.exists() else {}
                 if vibe and vibe.get("source_sha256") != manifest.content_sha256:
                     vibe = {}
+                evidence = load_evidence(path, source_sha256=manifest.content_sha256)
+                if path.with_suffix(".evidence.json").exists() and (
+                    not evidence
+                    or evidence.get("status") != "admitted"
+                    or not evidence.get("admission", {}).get("mixable")
+                ):
+                    continue
+                if evidence:
+                    vibe = {**vibe, **self.measured_vibe(evidence)}
             except (OSError, ValueError):
                 continue
             hydrate_title(manifest, path)
@@ -134,6 +146,7 @@ class Depot:
     def add(self, manifest: AssetManifest, path: Path, vibe: dict | None = None) -> None:
         if not manifest.admissible():
             raise ValueError("only ready, gated assets enter the depot")
+        self.normalize_legacy_intent(manifest)
         words = frozenset(
             _tokens(
                 " ".join(
@@ -146,8 +159,37 @@ class Depot:
             )
         )
         hydrate_title(manifest, path)
-        self.assets[manifest.asset_id] = DepotAsset(manifest, path, words, vibe or {})
+        evidence = load_evidence(path, source_sha256=manifest.content_sha256)
+        if path.with_suffix(".evidence.json").exists() and (
+            not evidence
+            or evidence.get("status") != "admitted"
+            or not evidence.get("admission", {}).get("mixable")
+        ):
+            raise ValueError("audio evidence does not admit this content for mixing")
+        measured = self.measured_vibe(evidence) if evidence else {}
+        self.assets[manifest.asset_id] = DepotAsset(
+            manifest, path, words, {**(vibe or {}), **measured}
+        )
         self.document_frequency.update(words)
+
+    @staticmethod
+    def normalize_legacy_intent(manifest: AssetManifest):
+        if not manifest.asset_id.startswith("live-"):
+            return
+        for name in ("energy", "mood", "instrumental"):
+            if name in manifest.tags:
+                manifest.tags.setdefault(f"intent_{name}", manifest.tags.pop(name))
+
+    @staticmethod
+    def measured_vibe(evidence: dict) -> dict:
+        final = evidence.get("final") or {}
+        return {
+            "source_sha256": final.get("source_sha256"),
+            **(final.get("spectral_balance") or {}),
+            "audio_level_curve": final.get("level_curve"),
+            "audio_observations": evidence.get("observations"),
+            "mixing_capabilities": evidence.get("admission", {}).get("capabilities"),
+        }
 
     def search(
         self,
@@ -157,17 +199,23 @@ class Depot:
         exclude_families: set[str] | None = None,
         limit: int = 12,
         min_duration_s: float = 0.0,
+        genre_override: str = "",
     ) -> list[tuple[float, DepotAsset]]:
-        query = _tokens(theme)
+        # Backend control directives are not artistic search terms. Including their
+        # tempo/language boilerplate can remove otherwise compatible depot tracks.
+        query = _tokens(theme.split(MARKER, 1)[0] + " " + genre_override)
         if not query:
             return []
         total = max(1, len(self.assets))
-        requested_genres = query & _GENRES
+        requested_genres = (_tokens(genre_override) if genre_override else query) & _GENRES
         intent = vocal_intent(theme)
         # Rap without a vocal override remains a vocal request, matching generation.
-        vocal = intent is True or (intent is None and bool(
-            re.search(r"\brap\b|hip[ -]?hop|boom[ -]?bap|\btrap\b|\bdrill\b", theme.lower())
-        ))
+        vocal = intent is True or (
+            intent is None
+            and bool(
+                re.search(r"\brap\b|hip[ -]?hop|boom[ -]?bap|\btrap\b|\bdrill\b", theme.lower())
+            )
+        )
         results: list[tuple[float, DepotAsset]] = []
         for asset in self.assets.values():
             if asset.manifest.audio.duration_s < min_duration_s:
@@ -176,7 +224,12 @@ class Depot:
                 continue
             if requested_genres and not requested_genres.issubset(asset.words):
                 continue
-            recorded = {tag.value.lower() for tag in asset.manifest.tags.get("instrumental", [])}
+            recorded = {
+                tag.value.lower()
+                for tag in asset.manifest.tags.get(
+                    "intent_instrumental", asset.manifest.tags.get("instrumental", [])
+                )
+            }
             source = asset.manifest.provenance.source_prompt or ""
             if intent is False:
                 # Unknown legacy tracks do not satisfy an explicit no-lyrics request.
@@ -187,9 +240,9 @@ class Depot:
                     vocal_intent(source) is not False or has_vocal_delivery(source)
                 ):
                     continue
-            elif vocal and ("true" in recorded or (
-                "false" not in recorded and vocal_intent(source) is False
-            )):
+            elif vocal and (
+                "true" in recorded or ("false" not in recorded and vocal_intent(source) is False)
+            ):
                 continue
             common = query & asset.words
             if not common:

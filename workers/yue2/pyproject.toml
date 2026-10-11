@@ -13,6 +13,7 @@ analysis = [
     "numpy>=1.26",
     "soundfile>=0.12",
     "librosa>=0.10",
+    "scipy>=1.13",
 ]
 # Only the torch backend needs this. The GGUF backends are external C++ binaries.
 torch = [

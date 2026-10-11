@@ -27,6 +27,7 @@ from vexa_contracts import (
     DeckId,
     GenerationBrief,
     GenerationJob,
+    GenerationSettings,
     MusicalClock,
     ReadinessState,
     RequestClass,
@@ -34,14 +35,18 @@ from vexa_contracts import (
     SessionState,
     UserRequest,
 )
+from vexa_yue2.backends import BackendUnavailable
 
 from .feasibility import FeasibilityFilter
+from .generators import catalog
 from .live import LiveSet
 from .planner_client import PlannerClient
 from .policy import DecisionPolicy, RulePolicy
 from .store import Store
 from .track_titles import title_for_asset
 from .vocal_intent import apply_instrumental_mode
+from .writers import WriterProfile
+from .writers import catalog as writer_catalog
 
 # --- request/response bodies -------------------------------------------------
 
@@ -49,6 +54,9 @@ from .vocal_intent import apply_instrumental_mode
 class CreateSessionBody(BaseModel):
     theme: str = Field(min_length=1)
     instrumental: bool | None = None
+    generation_settings: GenerationSettings | None = None
+    generator: str | None = None
+    generator_preset: str | None = None
     session_id: str | None = None
     bpm: float = Field(default=120.0, gt=0.0)
     fallback_asset_id: str | None = None
@@ -76,6 +84,9 @@ class SubmitRequestBody(BaseModel):
 class ThemeBody(BaseModel):
     theme: str = Field(min_length=1)
     instrumental: bool | None = None
+    generation_settings: GenerationSettings | None = None
+    generator: str | None = None
+    generator_preset: str | None = None
 
 
 class EqualizerBody(BaseModel):
@@ -87,6 +98,10 @@ class EqualizerBody(BaseModel):
 class FeedbackBody(BaseModel):
     rating: str = Field(pattern="^(like|dislike)$")
     note: str = Field(default="", max_length=500)
+
+
+class ResumeGenerationBody(BaseModel):
+    retry_failed: bool = False
 
 
 class SubmitRequestResponse(BaseModel):
@@ -138,8 +153,9 @@ class SessionStateResponse(BaseModel):
 # --- app ---------------------------------------------------------------------
 
 
-def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
-               live: LiveSet | None = None) -> FastAPI:
+def create_app(
+    store: Store | None = None, policy: DecisionPolicy | None = None, live: LiveSet | None = None
+) -> FastAPI:
     """Build the ASGI app. A store can be injected so tests share one without globals."""
     app = FastAPI(
         title="VEXA//DECK orchestrator",
@@ -149,6 +165,7 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
     app.state.store = store or Store()
     app.state.live = live
     if live is not None:
+
         @app.on_event("shutdown")
         def close_live() -> None:
             live.stop()
@@ -171,11 +188,179 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
             "planner": app.state.planner.health(),
         }
 
+    @app.get("/generation/models")
+    def generation_models() -> dict[str, object]:
+        return {
+            "models": catalog(),
+            "selected": {
+                "generator": live.generator if live else "yue2",
+                "preset": live.generator_preset if live else "q8",
+            },
+        }
+
+    @app.get("/generation/batches")
+    def generation_batches() -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        return {"batches": live.generation_batches()}
+
+    @app.get("/generation/writers")
+    def generation_writers() -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        return {"writers": writer_catalog(), "selected": live.writer_profile()}
+
+    @app.post("/generation/writer")
+    def configure_writer(body: WriterProfile) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        from vexa_yue2.backends import BackendUnavailable
+
+        try:
+            return {"selected": live.configure_writer(body)}
+        except BackendUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/generation/settings")
+    def generation_settings() -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        return live.generation_settings()
+
+    @app.post("/generation/settings")
+    def configure_generation_settings(body: GenerationSettings) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        return live.configure_generation_settings(body)
+
+    @app.post("/generation/settings/validate")
+    def validate_generation_settings(body: GenerationSettings) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        return {"selected": body.model_dump()}
+
+    @app.post("/generation/preview")
+    def preview_generation(body: ThemeBody) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        try:
+            return live.preview_generation(
+                apply_instrumental_mode(body.theme, body.instrumental),
+                request_controls(body),
+                generator=body.generator,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/generation/cancel")
+    def cancel_generation() -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        return live.cancel_generation()
+
+    @app.get("/generation/batches/{batch_id}/tracks/{slot}")
+    def generation_track(batch_id: str, slot: int) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        try:
+            return live.track_report(batch_id, slot)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/generation/batches/{batch_id}/tracks/{slot}/{action}")
+    def generation_track_action(batch_id: str, slot: int, action: str) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        if action not in {"retry", "replace"}:
+            raise HTTPException(status_code=404, detail="unknown track action")
+        try:
+            return attach_live_session(live.retry_slot(batch_id, slot, replace=action == "replace"))
+        except BackendUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/generation/batches/{batch_id}")
+    def generation_batch(batch_id: str) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        try:
+            return live.generation_batch(batch_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/generation/batches/{batch_id}/resume")
+    def resume_generation(batch_id: str, body: ResumeGenerationBody) -> dict:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        from vexa_yue2.backends import BackendUnavailable
+
+        try:
+            live.generation_batch(batch_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            return attach_live_session(
+                live.resume_generation(batch_id, retry_failed=body.retry_failed)
+            )
+        except BackendUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def attach_live_session(status):
+        session_id = status.get("session_id")
+        if session_id and session_id not in app.state.store.sessions:
+            state = live.state or SessionState(
+                session_id=session_id, theme=status.get("theme") or "", clock=MusicalClock(bpm=120)
+            )
+            app.state.store.create_session(state)
+        return status
+
+    def select_generator(body) -> None:
+        if body.generator is None and body.generator_preset is None:
+            return
+        if live is None:
+            raise HTTPException(status_code=409, detail="live generation disabled")
+        from vexa_yue2.backends import BackendUnavailable
+
+        try:
+            live.configure_generator(body.generator, body.generator_preset)
+        except BackendUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def request_controls(body) -> GenerationSettings | None:
+        if body.instrumental is None:
+            return body.generation_settings
+        controls = body.generation_settings or GenerationSettings.model_validate(
+            live.generation_settings()["selected"] if live else {}
+        )
+        try:
+            return GenerationSettings.model_validate(
+                {
+                    **controls.model_dump(),
+                    "vocal_mode": "instrumental" if body.instrumental else "auto",
+                }
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post("/sessions", response_model=CreateSessionResponse)
     def create_session(body: CreateSessionBody) -> CreateSessionResponse:
         if live is not None and live.state is not None:
             raise HTTPException(status_code=409, detail="a live set is already running")
+        select_generator(body)
         theme = apply_instrumental_mode(body.theme, body.instrumental)
+        controls = request_controls(body)
+        if live:
+            try:
+                theme = live.preview_generation(theme, controls)["plan"]["intent"]["theme"]
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         session_id = body.session_id or f"sess-{uuid.uuid4().hex[:8]}"
         state = SessionState(
             session_id=session_id,
@@ -185,14 +370,15 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
         )
         app.state.store.create_session(state)
         ready = len(app.state.store.ready_assets())
-        live_status = live.start(theme, session_id=session_id) if live else None
+        live_status = live.start(theme, session_id=session_id, controls=controls) if live else None
         if live is not None and live.state is not None:
             app.state.store.sessions[session_id].state = live.state
         return CreateSessionResponse(
             session_id=session_id,
             theme=theme,
-            can_start_now=bool(live_status.get("running")) if live_status else
-                ready > 0 or body.fallback_asset_id is not None,
+            can_start_now=bool(live_status.get("running"))
+            if live_status
+            else ready > 0 or body.fallback_asset_id is not None,
             ready_asset_count=ready,
             generating=bool(live_status.get("generating")) if live_status else False,
         )
@@ -206,7 +392,14 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
         _record(app, session_id)
         if live is None or live.status()["session_id"] != session_id:
             raise HTTPException(status_code=409, detail="no active live set for session")
-        return live.steer(apply_instrumental_mode(body.theme, body.instrumental))
+        select_generator(body)
+        theme = apply_instrumental_mode(body.theme, body.instrumental)
+        try:
+            controls = request_controls(body)
+            live.preview_generation(theme, controls)
+            return live.steer(theme, controls=controls)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/audio/equalizer")
     def equalizer_status() -> dict[str, object]:
@@ -230,10 +423,21 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
             ) from exc
 
     @app.post("/live/stop")
-    def stop_live() -> dict[str, bool]:
+    def stop_live() -> dict[str, object]:
         if live is not None:
-            live.stop()
+            return live.stop_playback()
         return {"running": False}
+
+    @app.post("/live/start")
+    def start_playback() -> dict[str, object]:
+        if live is None:
+            raise HTTPException(status_code=409, detail="live audio disabled")
+        try:
+            return live.start_playback()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/sessions/{session_id}/feedback")
     def submit_feedback(session_id: str, body: FeedbackBody) -> dict[str, object]:
@@ -257,16 +461,19 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
 
         if live is not None and live.status()["session_id"] == session_id:
             if request_class is RequestClass.IMMEDIATE_CONTROL:
-                raise HTTPException(status_code=422,
-                                    detail="use /live/stop for host playback control")
+                raise HTTPException(
+                    status_code=422, detail="use /live/stop for host playback control"
+                )
             snapshot = live.steer(body.text)
             if live.state is not None:
                 record.state = live.state
             request_id = f"req-{uuid.uuid4().hex[:8]}"
             record.log.record(kind="theme_queued", request_id=request_id, text=body.text)
             return SubmitRequestResponse(
-                request_id=request_id, status="Preparing a theme-matched transition",
-                state="queued", generation=record.state.generation,
+                request_id=request_id,
+                status="Preparing a theme-matched transition",
+                state="queued",
+                generation=record.state.generation,
                 queued_generation=bool(snapshot["generating"]),
                 detail="The current track keeps playing until a feasible successor is prepared",
             )
@@ -380,19 +587,28 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
                 brief = {}
             if not isinstance(brief, dict):
                 brief = {}
-            tracks.append({"asset_id": asset.manifest.asset_id,
-                           "title": title_for_asset(asset),
-                           "duration_s": asset.manifest.audio.duration_s,
-                           "bpm": asset.manifest.beat_grid.bpm,
-                           "theme": brief.get("theme") or "legacy generation",
-                           "style": brief.get("style") or asset.manifest.provenance.source_prompt,
-                           "file_size": asset.path.stat().st_size,
-                           "playing": bool(live.current and
-                                           live.current.manifest.asset_id ==
-                                           asset.manifest.asset_id),
-                           "prepared": bool(live.prepared and
-                                            live.prepared.asset.manifest.asset_id ==
-                                            asset.manifest.asset_id)})
+            tracks.append(
+                {
+                    "asset_id": asset.manifest.asset_id,
+                    "title": title_for_asset(asset),
+                    "duration_s": asset.manifest.audio.duration_s,
+                    "bpm": asset.manifest.beat_grid.bpm,
+                    "theme": brief.get("theme") or "legacy generation",
+                    "style": brief.get("style") or asset.manifest.provenance.source_prompt,
+                    "file_size": asset.path.stat().st_size,
+                    "mixing_capabilities": asset.vibe.get("mixing_capabilities"),
+                    "observation_status": (asset.vibe.get("audio_observations") or {}).get(
+                        "status"
+                    ),
+                    "playing": bool(
+                        live.current and live.current.manifest.asset_id == asset.manifest.asset_id
+                    ),
+                    "prepared": bool(
+                        live.prepared
+                        and live.prepared.asset.manifest.asset_id == asset.manifest.asset_id
+                    ),
+                }
+            )
         return sorted(tracks, key=lambda row: str(row["asset_id"]), reverse=True)
 
     @app.get("/depot/tracks/{asset_id}/audio")
@@ -410,12 +626,14 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
             asset = live.depot.assets.get(asset_id)
             if asset is None or not asset_id.startswith("live-"):
                 raise HTTPException(status_code=404, detail="generated track not found")
-            in_use = ({live.current.manifest.asset_id} if live.current else set())
+            in_use = {live.current.manifest.asset_id} if live.current else set()
             if live.prepared is not None:
                 in_use.add(live.prepared.asset.manifest.asset_id)
             if live.state is not None:
-                for deck_id, deck in ((DeckId.A, live.engine.mixer.decks[0]),
-                                      (DeckId.B, live.engine.mixer.decks[1])):
+                for deck_id, deck in (
+                    (DeckId.A, live.engine.mixer.decks[0]),
+                    (DeckId.B, live.engine.mixer.decks[1]),
+                ):
                     if deck.playing:
                         loaded_id = live.state.deck(deck_id).asset_id
                         if loaded_id:
@@ -449,9 +667,7 @@ def create_app(store: Store | None = None, policy: DecisionPolicy | None = None,
         return {
             "session_id": session_id,
             "candidates": [a.model_dump(mode="json") for a in result.candidates],
-            "rejections": [
-                {"asset_id": r.asset_id, "reason": r.reason} for r in result.rejections
-            ],
+            "rejections": [{"asset_id": r.asset_id, "reason": r.reason} for r in result.rejections],
         }
 
     return app
