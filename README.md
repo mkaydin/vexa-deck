@@ -31,13 +31,25 @@ that becomes more energetic"* — and it builds a continuous set from prepared m
 | 🎚️ | **Five-band EQ** | Adjust bands, preamp and presets with smoothed changes. |
 | 📺 | **Looping video** | Upload local videos; choose Normal, Pixel art or ASCII art and tune effects live. |
 | 💠 | **Cyberpunk console** | Four color themes, audio spectrum, custom window controls and compact layouts. |
+| 🧭 | **Focused controls** | Session and playback controls up front; models, writer and detailed options in Music setup. |
 | 💬 | **Listener feedback** | Save likes/dislikes for future Laya training; playback currently follows rules. |
 
 ## 🖥️ Desktop preview
 
+### ASCII video / neon violet
+
+![VEXA running on Linux with the neon violet theme and a local video rendered as colorful ASCII art](assets/docs/ascii-video-violet.png)
+
+*User screenshot of the earlier three-column layout: looping ASCII video, neon violet console,
+generator and writer selectors, and A/B decks. Playback is off air in this capture.*
+
+### Current layout
+
 ![VEXA desktop preview with theme input, two named decks, spectrum and blank video panel](assets/docs/desktop-preview.png)
 
-*Design preview with sample track data; no audio is playing. The center stays blank until you upload a video.*
+*Updated two-column layout with sample track data; no audio is playing. Music setup holds
+the detailed options, while session progress and playback controls stay in the main view.
+The center stays blank until you upload a video.*
 
 <table>
   <tr>
