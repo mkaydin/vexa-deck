@@ -40,8 +40,9 @@ that becomes more energetic"* — and it builds a continuous set from prepared m
 
 ![VEXA running on Linux with the neon violet theme and a local video rendered as colorful ASCII art](assets/docs/ascii-video-violet.png)
 
-*User screenshot of the earlier three-column layout: looping ASCII video, neon violet console,
-generator and writer selectors, and A/B decks. Playback is off air in this capture.*
+*User screenshot of the current two-column layout: looping ASCII video, neon violet console,
+active Deck A, cued Deck B, live audio spectrum and generation progress. Detailed options
+are available through Music setup.*
 
 ### Current layout
 
