@@ -128,7 +128,9 @@ def test_live_batch_admits_ten_tracks_and_reports_progress(monkeypatch, tmp_path
         music_plan=None,
         seed=None,
         render_timeout_s=None,
+        runtime_components=None,
     ):
+        assert runtime_components and "binary" in runtime_components
         submitted.append((theme, duration_s, energy, style))
         assert prompt_origin == "local"
         return SimpleNamespace(

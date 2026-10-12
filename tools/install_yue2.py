@@ -35,7 +35,7 @@ def commands(destination: Path, jobs: int):
     ]
 
 
-def install(destination: Path, jobs: int, dry_run: bool):
+def install(destination: Path, jobs: int, dry_run: bool, runtime_only: bool = False):
     steps = commands(destination, jobs)
     if dry_run:
         print(
@@ -79,6 +79,8 @@ def install(destination: Path, jobs: int, dry_run: bool):
             )
     for step in steps[2:]:
         subprocess.run(step, check=True)
+    if runtime_only:
+        return
     from huggingface_hub import hf_hub_download
 
     paths = []
@@ -108,8 +110,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=ROOT / "third_party/yue2.cpp")
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--runtime-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.jobs <= 64:
         parser.error("--jobs must be between 1 and 64")
-    install(args.directory.resolve(), args.jobs, args.dry_run)
+    install(args.directory.resolve(), args.jobs, args.dry_run, args.runtime_only)

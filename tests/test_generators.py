@@ -221,3 +221,64 @@ def test_api_accepts_selected_model_and_reports_it_without_rendering(monkeypatch
         )
         assert rejected.status_code == 503
         assert live._pending_start == ("techno", "model-test")
+
+
+def test_managed_install_and_frozen_components_override_later_configuration(monkeypatch, tmp_path):
+    import json
+
+    from vexa_orchestrator import generators
+
+    monkeypatch.setattr(generators, "ROOT", tmp_path)
+    names = generators._legacy_components("minimax", "balanced")
+    frozen = {}
+    for key in names:
+        path = tmp_path / "verified" / key
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"fixture")
+        if key == "binary":
+            path.chmod(0o755)
+        frozen[key] = str(path)
+    registry = tmp_path / "var/config/model-registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({"minimax:balanced": {"preferred": True, "components": frozen}}))
+    monkeypatch.setenv("VEXA_MINIMAX_MODELS", str(tmp_path / "older-install"))
+    assert {k: str(v) for k, v in generators.components("minimax", "balanced").items()} == frozen
+    monkeypatch.setattr(generators, "components", lambda *a: {})
+    assert {
+        k: str(v) for k, v in generators.resolve_components("minimax", "balanced", frozen).items()
+    } == frozen
+
+
+def test_yue_render_uses_managed_resolver(monkeypatch, tmp_path):
+    import json
+
+    from vexa_orchestrator import generation, generators
+
+    monkeypatch.setattr(generators, "ROOT", tmp_path)
+    paths = {}
+    for key in ("binary", "model", "vae"):
+        path = tmp_path / "managed" / key
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"fixture")
+        path.chmod(0o755)
+        paths[key] = str(path)
+    registry = tmp_path / "var/config/model-registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({"yue2:q8": {"preferred": True, "components": paths}}))
+    monkeypatch.setattr(generation, "_gpu_index", lambda: "fixture-gpu")
+    commands = []
+
+    def stop_before_render(command, **kwargs):
+        commands.append(command)
+        raise AssertionError("captured render command")
+
+    monkeypatch.setattr(generation.subprocess, "Popen", stop_before_render)
+    with pytest.raises(AssertionError, match="captured render"):
+        generation.generate_theme(
+            "instrumental techno",
+            tmp_path / "library",
+            style="instrumental techno",
+            generator="yue2",
+            preset="q8",
+        )
+    assert commands and all(path in commands[0] for path in paths.values())

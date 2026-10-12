@@ -29,6 +29,7 @@ import numpy as np
 from .equalizer import MasterEqualizer
 from .loader import MasterLimiter, PreloadedTrack
 from .queue import Clock, Command, CommandKind, CommandQueue
+from .telemetry import AudioTelemetry
 
 
 @dataclass(slots=True)
@@ -122,7 +123,10 @@ class Mixer:
         self._fade_curve = np.empty(max_block, dtype=np.float32)
         self._limiter = MasterLimiter(frames=max_block, channels=channels, sample_rate=sample_rate)
 
+        self.telemetry = AudioTelemetry(sample_rate, channels)
         self.equalizer = MasterEqualizer(sample_rate, channels)
+        self._skip_pending = None
+        self.skip_completed = 0
         self._running = False
 
     # -- engine-facing API; never called from the callback -----------------
@@ -147,6 +151,7 @@ class Mixer:
         self._running = True
 
     def stop(self) -> None:
+        self._skip_pending = None
         self._running = False
 
     # -- the callback -------------------------------------------------------
@@ -175,6 +180,23 @@ class Mixer:
         for command in self.queue.drain():
             self._apply(command)
 
+        if self._skip_pending is not None:
+            incoming, track, fade_frames, token = self._skip_pending
+            outgoing = self.decks[1 - incoming]
+            if outgoing.fade_remaining == 0:
+                outgoing.playing = False
+                if track is not None:
+                    self._apply(
+                        Command(CommandKind.LOAD_TRACK, deck=incoming, value=1, track=track)
+                    )
+                    deck = self.decks[incoming]
+                    deck.gain = 1.0
+                    deck.fade_gain = 0.0
+                    deck.fade_total = deck.fade_remaining = fade_frames
+                    deck.fade_target = 1.0
+                    deck.fade_is_in = True
+                self.skip_completed = token
+                self._skip_pending = None
         usable = min(frames, self._out.shape[0])
         self._render_deck(self.decks[0], self._scratch_a, usable)
         self._render_deck(self.decks[1], self._scratch_b, usable)
@@ -189,6 +211,7 @@ class Mixer:
 
         self.equalizer.process(mix[:usable])
         outdata[:usable] = self._limiter.process(mix[:usable])
+        self.telemetry.capture(outdata, usable)
         self.clock.advance(frames)
         self._advance_fades(frames)
 
@@ -215,9 +238,7 @@ class Mixer:
             take = min(frames - written, available)
             if take <= 0:
                 break
-            target[written : written + take] = track.samples[
-                deck.position : deck.position + take
-            ]
+            target[written : written + take] = track.samples[deck.position : deck.position + take]
             written += take
             if abs(deck.tempo_ratio - 1.0) < 0.001:
                 deck.position += take
@@ -231,12 +252,13 @@ class Mixer:
                     break
 
         if deck.fade_remaining > 0 and deck.fade_total > 0:
-            np.add(self._fade_index[:written],
-                   deck.fade_total - deck.fade_remaining,
-                   out=self._fade_curve[:written])
+            np.add(
+                self._fade_index[:written],
+                deck.fade_total - deck.fade_remaining,
+                out=self._fade_curve[:written],
+            )
             self._fade_curve[:written] /= deck.fade_total
-            np.clip(self._fade_curve[:written], 0.0, 1.0,
-                    out=self._fade_curve[:written])
+            np.clip(self._fade_curve[:written], 0.0, 1.0, out=self._fade_curve[:written])
             self._fade_curve[:written] *= np.pi / 2.0
             if deck.fade_is_in:
                 np.sin(self._fade_curve[:written], out=self._fade_curve[:written])
@@ -265,7 +287,8 @@ class Mixer:
             else:
                 fraction = 1.0 - deck.fade_remaining / deck.fade_total
                 deck.fade_gain = (
-                    float(np.sin(fraction * np.pi / 2)) if deck.fade_is_in
+                    float(np.sin(fraction * np.pi / 2))
+                    if deck.fade_is_in
                     else float(np.cos(fraction * np.pi / 2))
                 )
 
@@ -296,8 +319,7 @@ class Mixer:
                     deck.track = command.track
                 # Install PCM and reset state together, before rendering either deck.
                 deck.position = (
-                    max(0, min(deck.track.frames, int(command.value2)))
-                    if deck.track else 0
+                    max(0, min(deck.track.frames, int(command.value2))) if deck.track else 0
                 )
                 deck.cue_point = deck.position
                 deck.tempo_ratio = 1.0
@@ -313,8 +335,7 @@ class Mixer:
                 # through the overlap, which is what makes this a crossfade rather than a cut.
                 deck.fade_gain = 0.0
                 deck.position = (
-                    max(0, min(deck.track.frames, int(command.value)))
-                    if deck.track else 0
+                    max(0, min(deck.track.frames, int(command.value))) if deck.track else 0
                 )
                 deck.cue_point = deck.position
                 deck.fade_target = 1.0
@@ -329,7 +350,27 @@ class Mixer:
                 other.fade_remaining = max(1, frames)
                 other.fade_total = max(1, frames)
                 other.fade_is_in = False
+            case CommandKind.FADE_IN:
+                deck.fade_gain = 0.0
+                deck.fade_total = deck.fade_remaining = max(1, frames)
+                deck.fade_target = 1.0
+                deck.fade_is_in = True
+            case CommandKind.SKIP_TRACK:
+                other = self._deck(1 - command.deck)
+                deck.playing = False
+                deck.fade_remaining = 0
+                other.loop = False
+                other.fade_total = other.fade_remaining = max(1, frames)
+                other.fade_target = 0.0
+                other.fade_is_in = False
+                self._skip_pending = (
+                    command.deck,
+                    command.track,
+                    max(1, frames),
+                    int(command.value),
+                )
             case CommandKind.EMERGENCY_STOP:
+                self._skip_pending = None
                 for d in self.decks:
                     d.playing = False
                     d.fade_remaining = 0
@@ -355,6 +396,7 @@ class Mixer:
 
     def snapshot(self) -> dict[str, object]:
         """A plain-data view for the control plane. Never called from the callback."""
+
         def deck(d: DeckState) -> dict[str, object]:
             fade_total, fade_remaining = d.fade_total, d.fade_remaining
             return {
@@ -365,7 +407,8 @@ class Mixer:
                 "gain": round(d.gain * d.fade_gain, 4),
                 "fading": d.fading,
                 "fade_progress": round(max(0.0, min(1.0, 1.0 - fade_remaining / fade_total)), 5)
-                if fade_total else 0.0,
+                if fade_total
+                else 0.0,
                 "fade_duration_s": round(fade_total / self.sample_rate, 5),
             }
 

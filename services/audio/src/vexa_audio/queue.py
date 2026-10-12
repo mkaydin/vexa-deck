@@ -32,14 +32,16 @@ class CommandKind(Enum):
     means in practice. There is no escape hatch for an arbitrary DSP command.
     """
 
-    LOAD_TRACK = "load_track"        # put a preloaded track on a deck
+    LOAD_TRACK = "load_track"  # put a preloaded track on a deck
     PLAY = "play"
     PAUSE = "pause"
     SEEK_BAR = "seek_bar"
     SET_GAIN = "set_gain"
     SET_TEMPO = "set_tempo"
-    CUE = "cue"                      # return a deck to its cue point
+    CUE = "cue"  # return a deck to its cue point
     START_CROSSFADE = "start_crossfade"
+    FADE_IN = "fade_in"
+    SKIP_TRACK = "skip_track"
     EMERGENCY_STOP = "emergency_stop"
 
 

@@ -49,7 +49,7 @@ def check():
     assert window.play_button.isEnabled()
     assert "Press START" in window.next_detail.text()
     assert window.footer_actions.itemAt(3).widget() is window.play_button
-    assert window.footer_actions.itemAt(4).widget() is window.stop_button
+    assert window.footer_actions.itemAt(5).widget() is window.stop_button
     window.show()
     app.processEvents()
     report_dir = ROOT / "var/reports/playback-start"

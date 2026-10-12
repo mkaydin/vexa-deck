@@ -30,7 +30,7 @@ MM_QUANTS = {
 }
 
 
-def components(generator: str, preset: str) -> dict[str, Path]:
+def _legacy_components(generator: str, preset: str) -> dict[str, Path]:
     if generator == "yue2":
         base = ROOT / "third_party/yue2.cpp"
         return {
@@ -62,6 +62,40 @@ def components(generator: str, preset: str) -> dict[str, Path]:
         "cond_model": base / "MiniMax-Music3-condition_encoder-F32.gguf",
         "vae_model": base / "MiniMax-Music3-vocoder-F32.gguf",
     }
+
+
+def components(generator: str, preset: str) -> dict[str, Path]:
+    existing = _legacy_components(generator, preset)
+    registry = ROOT / "var/config/model-registry.json"
+    try:
+        saved = json.loads(registry.read_text()).get(generator + ":" + preset, {})
+        paths = {k: Path(v) for k, v in saved.get("components", {}).items()}
+        valid = paths.keys() == existing.keys() and all(
+            p.is_file() and p.stat().st_size for p in paths.values()
+        )
+        if valid and saved.get("preferred"):
+            return paths
+        if valid and not all(p.is_file() and p.stat().st_size for p in existing.values()):
+            return paths
+    except (OSError, ValueError, TypeError):
+        pass
+    return existing
+
+
+def resolve_components(generator, preset, frozen=None):
+    paths = (
+        components(generator, preset)
+        if frozen is None
+        else {key: Path(value) for key, value in frozen.items()}
+    )
+    if paths.keys() != _legacy_components(generator, preset).keys():
+        raise BackendUnavailable("Saved runtime components do not match this generator")
+    for path in paths.values():
+        if not path.is_file() or path.stat().st_size == 0:
+            raise BackendUnavailable(f"Model/runtime component missing: {path}")
+    if not os.access(paths["binary"], os.X_OK):
+        raise BackendUnavailable("Model runtime is not executable")
+    return paths
 
 
 def selection(
@@ -246,9 +280,10 @@ def render_alternative(
     cancel=None,
     seed: int | None = None,
     timeout_s: int | None = None,
+    runtime_components: dict | None = None,
 ) -> dict:
-    generator, preset = selection(generator, preset, require_available=True)
-    paths = components(generator, preset)
+    generator, preset = selection(generator, preset)
+    paths = resolve_components(generator, preset, runtime_components)
     seed = secrets.randbelow(2**31) if seed is None else seed
     if type(seed) is not int or not 0 <= seed < 2**31:
         raise ValueError("render seed must be a nonnegative 31-bit integer")

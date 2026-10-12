@@ -766,24 +766,25 @@ def generate_theme(
     render_id: str | None = None,
     seed: int | None = None,
     render_timeout_s: int | None = None,
+    runtime_components: dict | None = None,
 ) -> DepotAsset:
     """Render through the selected backend and admit only a gated, cueable result."""
-    from .generators import native_revision, render_alternative, selection
+    from .generators import native_revision, render_alternative, resolve_components, selection
 
     generator, preset = selection(generator, preset)
     seed = secrets.randbelow(2**31) if seed is None else seed
     if type(seed) is not int or not 0 <= seed < 2**31:
         raise ValueError("render seed must be a nonnegative 31-bit integer")
+    if vocal_intent(theme) is False:
+        if lyrics.strip():
+            raise ValueError("instrumental generation requires empty lyrics")
+        if style is not None and has_vocal_delivery(style):
+            raise ValueError("instrumental generation style contains vocal delivery")
     render_metadata = {"generator": generator, "preset": preset, "seed": seed}
-    backend = ROOT / "third_party/yue2.cpp"
-    binary = Path(os.environ.get("VEXA_YUE_BINARY", backend / "build/yue-synth"))
-    model = Path(os.environ.get("VEXA_YUE_MODEL", backend / "models/YuE2-3B-Q8_0.gguf"))
-    vae = Path(os.environ.get("VEXA_YUE_VAE", backend / "models/YuE2-Vae-F32.gguf"))
     if generator == "yue2":
+        paths = resolve_components(generator, preset, runtime_components)
+        binary, model, vae = paths["binary"], paths["model"], paths["vae"]
         render_metadata["runtime_revision"] = native_revision(binary)
-        for path in (binary, model, vae):
-            if not path.exists():
-                raise BackendUnavailable(f"YuE2 component missing: {path}")
     library.mkdir(parents=True, exist_ok=True)
     if render_id is not None and not re.fullmatch(r"live-[a-f0-9]{12}", render_id):
         raise ValueError("invalid reserved render ID")
@@ -816,6 +817,7 @@ def generate_theme(
             cancel=cancel,
             seed=seed,
             timeout_s=render_timeout_s,
+            runtime_components=runtime_components,
         )
     else:
         # YuE2's default semantic minimum is only 200 frames (eight seconds). A duration

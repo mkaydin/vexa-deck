@@ -11,14 +11,15 @@ process does not stop playback — that is Phase B1's exit criterion
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from vexa_audio.equalizer import EqualizerSettings
 from vexa_contracts import (
@@ -40,6 +41,7 @@ from vexa_yue2.backends import BackendUnavailable
 from .feasibility import FeasibilityFilter
 from .generators import catalog
 from .live import LiveSet
+from .model_installs import ModelInstalls
 from .planner_client import PlannerClient
 from .policy import DecisionPolicy, RulePolicy
 from .store import Store
@@ -57,6 +59,7 @@ class CreateSessionBody(BaseModel):
     generation_settings: GenerationSettings | None = None
     generator: str | None = None
     generator_preset: str | None = None
+    generation_enabled: bool = True
     session_id: str | None = None
     bpm: float = Field(default=120.0, gt=0.0)
     fallback_asset_id: str | None = None
@@ -87,6 +90,7 @@ class ThemeBody(BaseModel):
     generation_settings: GenerationSettings | None = None
     generator: str | None = None
     generator_preset: str | None = None
+    generation_enabled: bool = True
 
 
 class EqualizerBody(BaseModel):
@@ -132,6 +136,12 @@ class EnqueueJobResponse(BaseModel):
     priority: int
 
 
+class ModelInstallBody(BaseModel):
+    generator: str
+    preset: str | None = None
+    accept_terms: bool = False
+
+
 class SessionStateResponse(BaseModel):
     session_id: str
     theme: str
@@ -159,15 +169,26 @@ def create_app(
     """Build the ASGI app. A store can be injected so tests share one without globals."""
     app = FastAPI(
         title="VEXA//DECK orchestrator",
-        version="0.1.0",
+        version="0.2.0",
         description="Deterministic control plane. Models are bounded; audio is elsewhere.",
     )
     app.state.store = store or Store()
     app.state.live = live
+    installs = (
+        ModelInstalls(
+            live.renderer.out_dir.parent / "model-installs",
+            busy=lambda: live._generating or live.engine.running,
+        )
+        if isinstance(live, LiveSet)
+        else None
+    )
+    app.state.model_installs = installs
     if live is not None:
 
         @app.on_event("shutdown")
         def close_live() -> None:
+            if installs is not None:
+                installs.close()
             live.stop()
 
         for asset in live.depot.assets.values():
@@ -320,7 +341,9 @@ def create_app(
         return status
 
     def select_generator(body) -> None:
-        if body.generator is None and body.generator_preset is None:
+        if not body.generation_enabled or (
+            body.generator is None and body.generator_preset is None
+        ):
             return
         if live is None:
             raise HTTPException(status_code=409, detail="live generation disabled")
@@ -370,7 +393,16 @@ def create_app(
         )
         app.state.store.create_session(state)
         ready = len(app.state.store.ready_assets())
-        live_status = live.start(theme, session_id=session_id, controls=controls) if live else None
+        live_status = (
+            live.start(
+                theme,
+                session_id=session_id,
+                controls=controls,
+                generation_enabled=body.generation_enabled,
+            )
+            if live
+            else None
+        )
         if live is not None and live.state is not None:
             app.state.store.sessions[session_id].state = live.state
         return CreateSessionResponse(
@@ -397,7 +429,7 @@ def create_app(
         try:
             controls = request_controls(body)
             live.preview_generation(theme, controls)
-            return live.steer(theme, controls=controls)
+            return live.steer(theme, controls=controls, generation_enabled=body.generation_enabled)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -422,11 +454,99 @@ def create_app(
                 status_code=500, detail="could not save equalizer settings"
             ) from exc
 
+    def installation_service():
+        if installs is None:
+            raise HTTPException(status_code=409, detail="model installation requires live backend")
+        return installs
+
+    def local_install_request(request):
+        if request.client is None or request.client.host not in {"127.0.0.1", "::1"}:
+            raise HTTPException(
+                status_code=403, detail="Model installation is available from the local app only"
+            )
+
+    @app.get("/models/catalog")
+    def install_catalog():
+        return {"models": installation_service().catalog()}
+
+    @app.get("/models/catalog/{generator}/{preset}/preflight")
+    def model_preflight(generator: str, preset: str):
+        try:
+            return installation_service().inspect(generator, preset)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="Cannot inspect download; check network and model access"
+            ) from exc
+
+    @app.get("/models/installations")
+    def installation_jobs():
+        return {"jobs": installation_service().list()}
+
+    @app.post("/models/installations")
+    def install_model(body: ModelInstallBody, request: Request):
+        local_install_request(request)
+        if not body.accept_terms:
+            raise HTTPException(status_code=422, detail="Review the model terms before downloading")
+        try:
+            return installation_service().start(body.generator, body.preset)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/models/installations/{identity}")
+    def install_job(identity: str):
+        try:
+            return installation_service().get(identity)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/models/installations/{identity}/cancel")
+    def cancel_install(identity: str, request: Request):
+        local_install_request(request)
+        try:
+            return installation_service().cancel(identity)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/models/installations/{identity}/resume")
+    def resume_install(identity: str, request: Request):
+        local_install_request(request)
+        try:
+            return installation_service().resume(identity)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/audio/telemetry")
+    async def audio_telemetry(request: Request):
+        if live is None:
+            raise HTTPException(status_code=409, detail="live audio disabled")
+
+        async def events():
+            while not await request.is_disconnected():
+                yield "data: " + json.dumps(live.engine.mixer.telemetry.cached) + "\n\n"
+                await asyncio.sleep(0.05)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.post("/live/stop")
     def stop_live() -> dict[str, object]:
         if live is not None:
             return live.stop_playback()
         return {"running": False}
+
+    @app.post("/live/skip")
+    def skip_playback():
+        if live is None:
+            raise HTTPException(status_code=409, detail="live audio disabled")
+        try:
+            return live.skip_track()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/live/start")
     def start_playback() -> dict[str, object]:
@@ -629,6 +749,9 @@ def create_app(
             in_use = {live.current.manifest.asset_id} if live.current else set()
             if live.prepared is not None:
                 in_use.add(live.prepared.asset.manifest.asset_id)
+            pending = getattr(live, "_skip_pending", None)
+            if pending is not None and pending[2] is not None:
+                in_use.add(pending[2][0].manifest.asset_id)
             if live.state is not None:
                 for deck_id, deck in (
                     (DeckId.A, live.engine.mixer.decks[0]),

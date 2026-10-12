@@ -13,10 +13,12 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSlider,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -120,9 +122,13 @@ class ConsoleSettingsDialog(QDialog):
         for key, (name, _) in theme.THEMES.items():
             self.theme_selector.addItem(name, key)
         saved = "terminal"
+        preferences = {}
         if persist and self.config_path.exists():
             with suppress(OSError, ValueError, AttributeError):
-                saved = json.loads(self.config_path.read_text()).get("theme", "terminal")
+                preferences = json.loads(self.config_path.read_text())
+                saved = preferences.get("theme", "terminal")
+        if not isinstance(preferences, dict):
+            preferences = {}
         index = self.theme_selector.findData(saved)
         self.theme_selector.setCurrentIndex(max(0, index))
         appearance.addWidget(self.theme_selector)
@@ -135,6 +141,54 @@ class ConsoleSettingsDialog(QDialog):
         appearance.addWidget(note)
         appearance.addStretch()
         tabs.addTab(appearance_page, "Appearance")
+        from spectrum import CHOICES, validate
+
+        spectrum_page = QWidget()
+        form = QFormLayout(spectrum_page)
+        self.spectrum_fields = {}
+        names = {
+            "style": "Drawing style",
+            "palette": "Spectrum palette",
+            "bands": "Bands",
+            "response": "Response",
+            "height": "Panel height",
+        }
+        display = {
+            "ascii": "Terminal ASCII",
+            "led": "Segmented LED",
+            "bars": "Smooth bars",
+            "mirror": "Mirrored bars",
+            "console": "Follow console",
+            "neon": "Cyan / violet",
+            "amber": "Amber / green",
+            "mono": "Monochrome",
+        }
+        options = validate(preferences.get("spectrum", {}))
+        self.owner.spectrum.configure(options)
+        for key, choices in CHOICES.items():
+            box = QComboBox()
+            box.setAccessibleName(names[key])
+            for value in choices:
+                box.addItem(display.get(value, str(value).title()), value)
+            box.setCurrentIndex(box.findData(options[key]))
+            self.spectrum_fields[key] = box
+            form.addRow(names[key], box)
+            box.currentIndexChanged.connect(self._spectrum_changed)
+        for key, title in (("peaks", "Peak markers"), ("labels", "Frequency labels")):
+            check = QCheckBox(title)
+            check.setChecked(options[key])
+            self.spectrum_fields[key] = check
+            form.addRow(check)
+            check.toggled.connect(self._spectrum_changed)
+        gain = QSpinBox()
+        gain.setRange(-20, 20)
+        gain.setSuffix(" dB (visual only)")
+        gain.setValue(options["gain"])
+        self.spectrum_fields["gain"] = gain
+        form.addRow("Display gain", gain)
+        gain.valueChanged.connect(self._spectrum_changed)
+        tabs.addTab(spectrum_page, "Spectrum")
+        self._spectrum_changed()
         self.theme_selector.currentIndexChanged.connect(self._theme_selected)
         theme.apply_theme(QApplication.instance(), self.theme_selector.currentData())
         self._debounce = QTimer(self)
@@ -150,11 +204,33 @@ class ConsoleSettingsDialog(QDialog):
             try:
                 self.config_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = self.config_path.with_suffix(".tmp")
-                temporary.write_text(json.dumps({"theme": selected}, indent=2) + "\n")
+                temporary.write_text(
+                    json.dumps(
+                        {"theme": selected, "spectrum": self.owner.spectrum.options}, indent=2
+                    )
+                    + "\n"
+                )
                 temporary.replace(self.config_path)
             except OSError as exc:
                 self.message.emit(f"Could not save appearance: {exc}")
         self.message.emit(f"Console theme: {selected}")
+
+    def _spectrum_changed(self):
+        options = {}
+        for key, widget in self.spectrum_fields.items():
+            options[key] = (
+                widget.currentData()
+                if isinstance(widget, QComboBox)
+                else widget.isChecked()
+                if isinstance(widget, QCheckBox)
+                else widget.value()
+            )
+        self.owner.spectrum.configure(options)
+        preferred = {"compact": 110, "default": 160, "tall": 220}[options["height"]]
+        self.owner.spectrum.setFixedHeight(
+            min(110, preferred) if self.owner.height() < 780 else preferred
+        )
+        self._theme_selected()
 
     def set_online(self, online):
         self.audio_page.setEnabled(online and self._ready)

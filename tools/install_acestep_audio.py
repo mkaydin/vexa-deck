@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=ROOT / "third_party/ACE-Step-1.5")
     parser.add_argument("--models", type=Path, default=ROOT / "models/acestep-audio")
+    parser.add_argument("--runtime-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     source = args.directory.resolve()
@@ -71,6 +72,8 @@ def main():
             link.symlink_to(os.path.relpath(shared, args.models), target_is_directory=True)
         else:
             patterns.append("acestep-5Hz-lm-1.7B/*")
+    if args.runtime_only:
+        return
     snapshot_download(
         MODEL_REPO, revision=MODEL_REVISION, local_dir=args.models, allow_patterns=patterns
     )

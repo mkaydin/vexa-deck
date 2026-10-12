@@ -5,6 +5,8 @@
 
 **Your atmosphere. Vexa's next set.**
 
+**Version 0.2.0** · Linux / Wayland
+
 An open-source, AI-assisted DJ that mixes prepared music and generates themed tracks in the background.
 
 ![Linux / Wayland](https://img.shields.io/badge/Linux-Wayland-63e3d1?style=flat-square&labelColor=0b141a)
@@ -32,6 +34,9 @@ that becomes more energetic"* — and it builds a continuous set from prepared m
 | 📺 | **Looping video** | Upload local videos; choose Normal, Pixel art or ASCII art and tune effects live. |
 | 💠 | **Cyberpunk console** | Four color themes, audio spectrum, custom window controls and compact layouts. |
 | 🧭 | **Focused controls** | Session and playback controls up front; models, writer and detailed options in Music setup. |
+| 📊 | **Live spectrum** | Post-master stereo measurement; ASCII, LED, smooth and mirrored bars with independent palettes. |
+| 📦 | **Model manager** | First-run setup, pinned downloads, verification, progress and recoverable installation jobs. |
+| ⏭️ | **Skip track** | Advance to the next eligible track while generation continues. |
 | 💬 | **Listener feedback** | Save likes/dislikes for future Laya training; playback currently follows rules. |
 
 ## 🖥️ Desktop preview
@@ -64,6 +69,99 @@ The center stays blank until you upload a video.*
 </table>
 
 *EQ and depot captures use test/preview data. User videos, music and model weights are not bundled.*
+
+## What's new in v0.2
+
+### Spectrum that follows the output
+
+The spectrum measures final mixed stereo audio **after master EQ and limiting**. A separate
+analysis worker supplies cached telemetry over a local HTTP stream; the audio callback only
+copies samples into bounded storage. It preserves stereo energy, including opposite-phase
+channels, and clears stale data after playback stops or the backend disconnects.
+
+Open **EQ / Theme → Spectrum** for:
+
+- **Terminal ASCII**, **Segmented LED**, **Smooth bars**, or **Mirrored bars**.
+- Follow-console, cyan/violet, amber/green, or monochrome palettes.
+- 16/32/64 requested bands, response presets, peak markers, frequency labels and visual gain.
+- Compact/default/tall heights; narrow windows reduce visible detail to prevent overlapping bars.
+
+These settings persist in `var/config/console.json`. Visual gain does not change audio volume.
+
+<img src="assets/docs/spectrum-v02.png" width="720" alt="v0.2 preview with segmented LED spectrum and START, SKIP and STOP controls">
+
+*Spectrum preview uses synthetic levels; no audio device was opened.*
+
+### First-run setup and model downloads
+
+If no generator is usable, Vexa opens **Model manager** on first launch. It can also be opened
+at any time from **Music setup → Model manager / Download**. Existing installations are detected;
+continuing without a download remains possible. **Generate new music** can be switched off for
+sets using compatible ready depot tracks. Audio generators and prompt writers are separate: choose
+an installed writer in Music setup, or **Template / instrumental only** for generation without
+a downloaded text model. Sung/rap lyrics require a suitable writer.
+
+Choose a generator/preset, review **Model terms**, and press **Install**. Preflight displays
+pinned weight size, new/missing files, disk reserve and missing prerequisite tools before
+confirmation. Jobs report file progress, transfer speed, stage, available ETA and detailed logs.
+**Cancel download** affects installation only; **Resume / Retry** recovers interrupted jobs.
+**Verify / Repair** checks an installed model and can reuse verified existing weight files.
+
+| Generator / preset | Pinned weight files, before reuse |
+| --- | ---: |
+| YuE2 Q8 | About 4.04 GiB |
+| MiniMax Balanced Q6/Q8 | About 10.01 GiB |
+| MiniMax Quality Q8/Q8 | About 11.94 GiB |
+| MiniMax Compact Q5/Q5 | About 8.44 GiB |
+| ACE-Step Turbo, including its planner | About 9.40 GiB |
+
+Sizes were checked against the pinned repository manifests; runtime environments, source builds
+and caches need additional space. The GUI checks the current manifest and available disk space.
+Downloads may run while listening. Runtime builds and repairs of existing files wait until
+playback and generation are idle, protecting active music. Stop playback and let the batch finish,
+or explicitly cancel generation through Reports, when you want a waiting runtime setup to proceed.
+
+YuE2/MiniMax require Git, CMake and a compatible CUDA toolkit; ACE-Step requires Git and uv.
+The downloader does not install privileged system packages. See the Linux setup instructions
+below for prerequisites. Inference still does not silently download missing models.
+
+Jobs and logs live under `var/model-installs/`. Managed runtimes and weights live under
+`third_party/managed/` and `models/managed/`; readiness is recorded in
+`var/config/model-registry.json`. Existing installations remain intact. A completed GUI install
+becomes the managed source for its generator/preset after verification and idle runtime setup.
+New generation batches freeze resolved component paths; older snapshots without that field
+continue to resolve their installation normally.
+Weights and installation state are excluded from Git and release archives.
+
+<img src="assets/docs/model-manager-v02.png" width="680" alt="Model manager preview showing pinned model, download progress and recovery controls">
+
+*Installation preview uses fixture progress. Verification covered small-file download/recovery
+fixtures and real pinned manifest metadata; fresh multi-GB downloads and complete native rebuilds
+have not been exercised through this GUI yet.*
+
+### Skip without cancelling generation
+
+**SKIP** advances once to the next verified, full-length, theme-compatible, unplayed track.
+It uses a short fade-out followed by a fade-in and starts the incoming track from the beginning.
+The manual handoff does not reuse an automatic mixing preview prepared for a different position.
+Normal automatic transitions retain their measured compatibility checks.
+
+If no next track is ready, playback fades to silence and shows **Waiting for next track**.
+It resumes when an eligible track arrives. **STOP** overrides pending skips and keeps playback
+silent; **START** remains the explicit playback restart. Skipping does not delete the track,
+record a dislike, cancel generation, or start a new batch merely because SKIP was pressed.
+
+### v0.2 validation
+
+Signal and callback tests cover stereo phase, tones, EQ/limiter output, fades, stale data,
+installation corruption/recovery and skip races. GUI checks cover all four spectrum styles,
+model setup, install/recovery routes and compact layouts. A real local HTTP/SSE-to-Qt test
+verifies delivery and clean shutdown without opening an audio device.
+
+An offline 3,000-callback microbenchmark measured approximately **0.078 ms → 0.079 ms** at the
+95th percentile with telemetry enabled, with zero underruns/deadline misses in that test.
+This is not a live playback + GPU generation + large-download soak result; that combined
+hardware validation remains pending.
 
 ## 🧩 How a set is built
 
@@ -278,9 +376,9 @@ separately using their official instructions. It does not change GPU drivers.
 From a checkout, run the installer directly. From a release, first verify and extract the files:
 
 ```bash
-sha256sum -c vexa-deck-0.1.0-linux.tar.gz.sha256
-tar -xzf vexa-deck-0.1.0-linux.tar.gz
-cd vexa-deck-0.1.0-linux
+sha256sum -c vexa-deck-0.2.0-linux.tar.gz.sha256
+tar -xzf vexa-deck-0.2.0-linux.tar.gz
+cd vexa-deck-0.2.0-linux
 ```
 
 Then:
@@ -366,7 +464,7 @@ bash scripts/package.sh
 SOURCE_DATE_EPOCH=0 bash scripts/package.sh --output dist
 ```
 
-Outputs `dist/vexa-deck-0.1.0-linux.tar.gz` and its SHA-256 checksum. The archive contains source,
+Outputs `dist/vexa-deck-0.2.0-linux.tar.gz` and its SHA-256 checksum. The archive contains source,
 locked dependency metadata, Qt/video assets, installers, tests, docs and license notices, plus a
 per-file inventory. It excludes `.git`, `.env`, private tool settings, virtual environments,
 weights, `vexa-videos/`, generated audio, datasets and runtime state. Unexpected large source files

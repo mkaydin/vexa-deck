@@ -301,6 +301,11 @@ class GenerationRunner:
                             else {}
                         ),
                         **({"music_plan": brief.music_plan} if brief.music_plan else {}),
+                        **(
+                            {"runtime_components": snapshot["runtime_components"]}
+                            if "runtime_components" in snapshot
+                            else {}
+                        ),
                     )
                     if self.cancel.is_set():
                         self.quarantine(asset.path)

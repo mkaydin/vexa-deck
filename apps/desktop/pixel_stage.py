@@ -2,9 +2,10 @@
 
 import pixel_theme as theme
 from pixel_theme import ascii_frame, font
-from PySide6.QtCore import QPointF, Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QFrame, QWidget
+from spectrum import SpectrumWidget  # noqa: F401
 
 
 class NeonPanel(QFrame):
@@ -43,50 +44,6 @@ class VideoViewport(QWidget):
     def resizeEvent(self, event):
         self.stage.setGeometry(self.rect())
         super().resizeEvent(event)
-
-
-class SpectrumWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(160)
-        self.setAccessibleName("32-band audio spectrum")
-        self.target = [0.0] * 32
-        self.values = [0.0] * 32
-        self.reduced_motion = False
-        self._timer = QTimer(self)
-        self._timer.setInterval(33)
-        self._timer.timeout.connect(self.animate)
-        self._timer.start()
-
-    def set_levels(self, values):
-        if len(values) == 32:
-            self.target = [max(0.0, min(1.0, float(value))) for value in values]
-
-    def animate(self):
-        amount = 1 if self.reduced_motion else 0.35
-        self.values = [
-            value + (target - value) * amount
-            for value, target in zip(self.values, self.target, strict=True)
-        ]
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor(theme.PANEL))
-        ascii_frame(p, self.rect())
-        p.setFont(font(9))
-        p.setPen(QColor(theme.MUTED))
-        p.drawText(16, 27, "FFT::32 / AUDIO ENERGY")
-        band_width = (self.width() - 32) / 32
-        segments = max(1, (self.height() - 52) // 12)
-        glyph_width = p.fontMetrics().horizontalAdvance("##")
-        for index, value in enumerate(self.values):
-            color = theme.CYAN if index < 12 else theme.AMBER if index < 24 else theme.PINK
-            x = 16 + (index + 0.5) * band_width - glyph_width / 2
-            for segment in range(segments):
-                active = segment < round(value * segments)
-                p.setPen(QColor(color if active else theme.EDGE))
-                p.drawText(QPointF(x, self.height() - 24 - segment * 12), "##" if active else "..")
 
 
 class DeckCard(QWidget):

@@ -36,7 +36,9 @@ def test_loader_failure_is_not_treated_as_retryable_audio_rejection(monkeypatch,
         ("VEXA_YUE_MODEL", model),
         ("VEXA_YUE_VAE", vae),
     ):
-        path.touch()
+        path.write_bytes(b"fixture")
+        if variable == "VEXA_YUE_BINARY":
+            path.chmod(0o755)
         monkeypatch.setenv(variable, str(path))
     monkeypatch.setattr("vexa_orchestrator.generation._gpu_index", lambda: "GPU-primary")
 

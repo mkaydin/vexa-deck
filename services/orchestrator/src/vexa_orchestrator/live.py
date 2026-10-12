@@ -16,6 +16,7 @@ from vexa_audio.engine import AudioEngine
 from vexa_audio.equalizer import EqualizerSettings
 from vexa_audio.loader import PreloadedTrack
 from vexa_audio.preview import PreviewRenderer, dsp_identity
+from vexa_audio.queue import Command, CommandKind
 from vexa_audio.telemetry import spectrum_levels
 from vexa_contracts import DeckId, GenerationSettings, MusicalClock, SessionState
 
@@ -77,6 +78,10 @@ class LiveSet:
         self._prepare_deadline: float | None = None
         self._preparation_misses = 0
         self._missed_for = None
+        self._skip_pending = None
+        self._skip_serial = 0
+        self._skip_waiting = False
+        self._next_skip_check = 0.0
         self._waiting = False
         self._playback_stopped = False
         self._played_hashes: set[str] = set()
@@ -103,6 +108,7 @@ class LiveSet:
         self._generation_prompt_origin: str | None = None
         self._preparing = False
         self._prepared_for: tuple[str, int] | None = None
+        self.generation_enabled = True
         self._generating = False
         self._pending_start: tuple[str, str] | None = None
         self.error: str | None = None
@@ -373,11 +379,13 @@ class LiveSet:
         session_id: str,
         controls: GenerationSettings | None = None,
         prepared_ids: list[str] | None = None,
+        generation_enabled: bool = True,
     ) -> dict[str, object]:
         with self._lock:
             if self.state is not None:
                 raise RuntimeError("a live set is already running")
             self._stop.clear()
+            self.generation_enabled = generation_enabled
             self._session_controls = controls or self._controls
             theme = conditioning_theme(theme, self._session_controls)
             matches = (
@@ -393,7 +401,7 @@ class LiveSet:
                         else {}
                     ),
                 )
-                if self._session_controls.start_policy == "depot"
+                if self._session_controls.start_policy == "depot" or not self.generation_enabled
                 else []
             )
             for similarity, asset in matches:
@@ -442,6 +450,12 @@ class LiveSet:
                     self.error = f"audio device could not start: {exc}"
                     return {"running": False, "generating": False, "reason": self.error}
             queued = self._queue_generation(theme, session_id)
+            if not queued and not self.generation_enabled:
+                self.error = (
+                    "No compatible ready depot track. "
+                    "Choose another vibe or enable music generation."
+                )
+                return {"running": False, "generating": False, "reason": self.error}
             return {
                 "running": False,
                 "generating": queued,
@@ -451,6 +465,9 @@ class LiveSet:
             }
 
     def _queue_generation(self, theme: str, session_id: str, *, replenish: bool = False) -> bool:
+        if not self.generation_enabled:
+            self._generation_stage = "depot_only"
+            return False
         try:
             snapshot = self._new_snapshot()
         except ValueError as exc:
@@ -500,10 +517,15 @@ class LiveSet:
     def _new_snapshot(self) -> dict:
         if self._resume_batch_id:
             return self._jobs.batch(self._resume_batch_id)["snapshot"]
+        from .generators import components
+
         return {
             "pipeline_version": 2,
             "generator": self.generator,
             "preset": self.generator_preset,
+            "runtime_components": {
+                k: str(v) for k, v in components(self.generator, self.generator_preset).items()
+            },
             "library": str(self.depot.library.resolve()),
             "writer": self.writer_profile(),
             "controls": self._session_controls.model_dump(),
@@ -775,8 +797,16 @@ class LiveSet:
             if batch["snapshot"]["library"] == str(self.depot.library.resolve())
         ]
 
-    def steer(self, theme: str, *, controls: GenerationSettings | None = None) -> dict[str, object]:
+    def steer(
+        self,
+        theme: str,
+        *,
+        controls: GenerationSettings | None = None,
+        generation_enabled: bool | None = None,
+    ) -> dict[str, object]:
         with self._lock:
+            if generation_enabled is not None:
+                self.generation_enabled = generation_enabled
             requested = controls or self._controls
             changed_controls = requested != self._session_controls
             self._session_controls = requested
@@ -874,6 +904,19 @@ class LiveSet:
     def tick(self) -> None:
         with self._lock:
             if self._playback_stopped:
+                return
+            if self._skip_pending is not None:
+                self._finish_skip()
+                return
+            if self._skip_waiting:
+                if time.monotonic() < self._next_skip_check:
+                    return
+                self._next_skip_check = time.monotonic() + 2
+                candidate = self._load_skip_candidate(self._skip_candidates())
+                if candidate:
+                    asset, track, cue = candidate
+                    self._play_after_gap(asset, track, cue, manual=True, fade_in=True)
+                    self._skip_waiting = False
                 return
             if self.state is None or self.current is None or self.cue is None:
                 return
@@ -1157,6 +1200,91 @@ class LiveSet:
                 self._preparing = False
                 self._prepare_deadline = None
 
+    def skip_track(self):
+        with self._lock:
+            if self._skip_pending is not None:
+                return self.status()
+            if self.state is None or self._playback_stopped or self._waiting:
+                raise RuntimeError("No playing track to skip.")
+            if any(d.fade_remaining > 0 for d in self.engine.mixer.decks):
+                raise RuntimeError("Wait for the current fade to finish before skipping.")
+            candidates = self._skip_candidates()
+            self._skip_serial += 1
+            incoming = 1 - self.active_deck
+            candidate = self._load_skip_candidate(candidates)
+            track = candidate[1] if candidate else None
+            command = Command(
+                CommandKind.SKIP_TRACK,
+                deck=incoming,
+                value=float(self._skip_serial),
+                value2=round(0.25 * self.engine.sample_rate),
+                track=track,
+            )
+            if not self.engine.queue.put(command):
+                raise RuntimeError("Playback command queue is full; try again.")
+            self._invalidate_preparation()
+            self._skip_pending = (self._skip_serial, incoming, candidate)
+            self._event({"event": "skip_requested", "asset_id": self.current.manifest.asset_id})
+            return self.status()
+
+    def _skip_candidates(self):
+        if self.state is None:
+            return []
+        matches = self.depot.search(
+            self.state.theme, limit=80, min_duration_s=self.min_track_duration_s
+        )
+        candidates = [asset for _, asset in matches]
+        # Prepared candidates already passed theme selection; revalidate their source on load.
+        if self.prepared is not None:
+            candidates.insert(0, self.prepared.asset)
+        return candidates
+
+    def _load_skip_candidate(self, candidates):
+        for asset in candidates:
+            if (
+                not asset.manifest.admissible()
+                or not self._duration_eligible(asset)
+                or asset.manifest.content_sha256 in self._played_hashes
+                or asset.manifest.family_id in self._played_families
+            ):
+                continue
+            try:
+                track, cue = self._load(asset)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            return asset, track, cue
+        return None
+
+    def _finish_skip(self):
+        token, incoming, candidate = self._skip_pending
+        if self.engine.mixer.skip_completed != token:
+            return
+        self._skip_pending = None
+        if candidate:
+            self.current, self.current_track, self.cue = candidate
+            self.active_deck = incoming
+            self._played_hashes.add(self.current.manifest.content_sha256)
+            self._played_families.add(self.current.manifest.family_id)
+            self.engine.clock.bpm = self.state.clock.bpm = self.current.manifest.beat_grid.bpm
+            self.state.deck(
+                DeckId.B if incoming else DeckId.A
+            ).asset_id = self.current.manifest.asset_id
+            self.state.deck(DeckId.B if incoming else DeckId.A).playing = True
+            self.state.deck(DeckId.A if incoming else DeckId.B).playing = False
+            self._waiting = self._skip_waiting = False
+            self._event(
+                {
+                    "event": "skip_completed",
+                    "asset_id": self.current.manifest.asset_id,
+                    "play_start_s": 0.0,
+                }
+            )
+        else:
+            self._waiting = self._skip_waiting = True
+            for deck_id in (DeckId.A, DeckId.B):
+                self.state.deck(deck_id).playing = False
+            self._event({"event": "skip_waiting"})
+
     def start_playback(self) -> dict[str, object]:
         """Restart explicitly stopped playback, or leave a natural silent gap."""
         with self._lock:
@@ -1243,7 +1371,13 @@ class LiveSet:
         self._play_after_gap(next_track.asset, next_track.track, next_track.cue)
 
     def _play_after_gap(
-        self, asset: DepotAsset, track: PreloadedTrack, cue: CueMap, *, manual: bool = False
+        self,
+        asset: DepotAsset,
+        track: PreloadedTrack,
+        cue: CueMap,
+        *,
+        manual: bool = False,
+        fade_in: bool = False,
     ):
         """After a gap this is a fresh start, not a stale transition preview."""
         assert self.state is not None
@@ -1251,7 +1385,12 @@ class LiveSet:
         self.engine.set_loop(False, self.active_deck)
         self.engine.set_loop(False, incoming)
         self.engine.set_gain(1.0, incoming)
-        self.engine.load_and_play(track, incoming, entry_frame=0)
+        self.engine.load_and_play(
+            track,
+            incoming,
+            entry_frame=0,
+            fade_in_frames=round(0.25 * self.engine.sample_rate) if fade_in else 0,
+        )
         self.state.deck(DeckId.B if incoming else DeckId.A).asset_id = asset.manifest.asset_id
         self.state.deck(DeckId.B if incoming else DeckId.A).playing = True
         self.state.deck(DeckId.A if incoming else DeckId.B).playing = False
@@ -1422,6 +1561,8 @@ class LiveSet:
             {
                 "waiting": self._waiting,
                 "stopped": self._playback_stopped,
+                "skipping": self._skip_pending is not None,
+                "skip_waiting": self._skip_waiting,
                 "reuse_policy": "never",
                 "preparing": self._preparing,
                 "preparation_misses": self._preparation_misses,
@@ -1495,6 +1636,8 @@ class LiveSet:
     def stop_playback(self) -> dict[str, object]:
         """Silence both decks without cancelling the current generation batch."""
         with self._lock:
+            self._skip_pending = None
+            self._skip_waiting = False
             self._playback_stopped = True
             self._waiting = True
             self._invalidate_preparation()
@@ -1517,6 +1660,8 @@ class LiveSet:
 
     def stop(self) -> None:
         """Shut down the entire live set, including workers (application exit only)."""
+        self._skip_pending = None
+        self._skip_waiting = False
         self._stop.set()
         self._render_cancel.set()
         self._prepare_cancel.set()

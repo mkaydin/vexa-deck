@@ -81,19 +81,20 @@ def install(args):
         revision = subprocess.check_output(
             ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
         ).strip()
-        diff = subprocess.check_output(
-            ["git", "-C", str(source), "diff", "HEAD", "--"], text=True
-        )
+        diff = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--"], text=True)
         if revision != SOURCE_REVISION or (diff and diff != PATCH.read_text()):
             raise RuntimeError(
                 "Preserve the existing native checkout; choose a separate --directory"
             )
     subprocess.run(steps[2], check=True)
     # Accept only the pinned source or this exact patch, preserving other checkouts.
-    applied = subprocess.run(
-        ["git", "-C", str(source), "apply", "--reverse", "--check", str(PATCH)],
-        capture_output=True,
-    ).returncode == 0
+    applied = (
+        subprocess.run(
+            ["git", "-C", str(source), "apply", "--reverse", "--check", str(PATCH)],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
     if not applied:
         subprocess.run(["git", "-C", str(source), "apply", str(PATCH)], check=True)
     for step in steps[3:]:
@@ -102,6 +103,8 @@ def install(args):
     (source / "build/mm-synth.vexa.json").write_text(
         json.dumps({"runtime_patch_sha256": patch_hash, "source_revision": SOURCE_REVISION}) + "\n"
     )
+    if args.runtime_only:
+        return
     os.environ.setdefault("HF_HOME", str(ROOT / "models/hf-cache"))
     from huggingface_hub import hf_hub_download
 
@@ -132,5 +135,6 @@ if __name__ == "__main__":
     parser.add_argument("--models", type=Path, default=ROOT / "models/minimax-music3")
     parser.add_argument("--preset", choices=PRESETS, default="balanced")
     parser.add_argument("--jobs", type=int, choices=range(1, 17), default=2)
+    parser.add_argument("--runtime-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     install(parser.parse_args())

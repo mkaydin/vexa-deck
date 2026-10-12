@@ -128,6 +128,7 @@ class AudioEngine:
                 raise
             self._stream = stream
             self.mixer.start()
+            self.mixer.telemetry.start()
 
     def _render_silence(self) -> None:
         """Pre-roll so the first real block does not land on a cold device."""
@@ -143,6 +144,7 @@ class AudioEngine:
                 finally:
                     self._stream = None
             self.mixer.stop()
+            self.mixer.telemetry.stop()
 
     @property
     def running(self) -> bool:
@@ -219,7 +221,13 @@ class AudioEngine:
         self.queue.put(Command(CommandKind.EMERGENCY_STOP))
 
     def load_and_play(
-        self, track: PreloadedTrack, deck: int = 0, *, fade_frames: int = 0, entry_frame: int = 0
+        self,
+        track: PreloadedTrack,
+        deck: int = 0,
+        *,
+        fade_frames: int = 0,
+        entry_frame: int = 0,
+        fade_in_frames: int = 0,
     ) -> None:
         """Install a preloaded track and start it.
 
@@ -231,6 +239,8 @@ class AudioEngine:
                 CommandKind.LOAD_TRACK, deck=deck, value=1.0, value2=float(entry_frame), track=track
             )
         )
+        if fade_in_frames > 0:
+            self.queue.put(Command(CommandKind.FADE_IN, deck=deck, value2=float(fade_in_frames)))
         if fade_frames > 0:
             self.queue.put(
                 Command(CommandKind.START_CROSSFADE, deck=deck, value2=float(fade_frames))
