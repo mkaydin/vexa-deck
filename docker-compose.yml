@@ -17,7 +17,7 @@ name: vexa-deck
 services:
   redis:
     image: redis:7-alpine
-    restart: unless-stopped
+    restart: "no"  # Start explicitly after the project disk is mounted.
     # Job priority and retry live here, so they survive an orchestrator restart.
     command: >
       redis-server
@@ -36,7 +36,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.service
-    restart: unless-stopped
+    restart: "no"  # Start explicitly after the project disk is mounted.
     command: ["python", "-m", "vexa_orchestrator"]
     environment:
       VEXA_HOST: "0.0.0.0"
@@ -55,7 +55,12 @@ services:
     volumes:
       - vexa-state:/var/lib/vexa
       # Read-only access to the library, so a container mistake cannot rewrite an asset.
-      - ./assets:/app/assets:ro
+      - type: bind
+        source: ./assets
+        target: /app/assets
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       redis:
         condition: service_healthy
@@ -69,7 +74,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.service
-    restart: unless-stopped
+    restart: "no"  # Start explicitly after the project disk is mounted.
     command: ["python", "-m", "vexa_planner"]
     environment:
       VEXA_HOST: "0.0.0.0"
